@@ -11,7 +11,11 @@ const worker = new Worker();
 
 async function buildServer() {
   await runMigrations();
-  const app = Fastify({ logger });
+  const app = Fastify({
+    logger: {
+      level: process.env.LOG_LEVEL ?? "info",
+    },
+  });
   await app.register(sensible);
 
   app.addHook("onRequest", async (request, reply) => {
