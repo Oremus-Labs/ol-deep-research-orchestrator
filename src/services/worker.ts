@@ -229,7 +229,8 @@ export class Worker {
           raw_storage_url: sources[i].raw_storage_url,
         });
       }
-      await this.indexNote(record.id, note.summary, {
+      const embedContent = clampForEmbedding(note.summary);
+      await this.indexNote(record.id, embedContent, {
         job_id: job.id,
         step_id: stepId,
         role: "page_summary",
@@ -249,7 +250,8 @@ export class Worker {
         tokenCount: estimateTokens(summary.step_summary),
         content: summary.step_summary,
       });
-      await this.indexNote(record.id, summary.step_summary, {
+      const embedContent = clampForEmbedding(summary.step_summary);
+      await this.indexNote(record.id, embedContent, {
         job_id: job.id,
         step_id: stepId,
         role: "step_summary",
@@ -448,7 +450,8 @@ export class Worker {
       tokenCount: estimateTokens(text),
       content: text,
     });
-    await this.indexNote(note.id, text, {
+    const embedTextContent = clampForEmbedding(text);
+    await this.indexNote(note.id, embedTextContent, {
       job_id: job.id,
       role: "critic_note",
       importance: 3,
@@ -464,7 +467,8 @@ export class Worker {
       tokenCount: estimateTokens(text),
       content: text,
     });
-    await this.indexNote(note.id, text, {
+    const embedTextContent = clampForEmbedding(text);
+    await this.indexNote(note.id, embedTextContent, {
       job_id: job.id,
       role: "cross_job_summary",
       importance: 4,
@@ -493,6 +497,21 @@ export class Worker {
 
 function estimateTokens(text: string) {
   return Math.ceil(text.split(/\s+/).length * 1.3);
+}
+
+function clampForEmbedding(text: string) {
+  const limit = config.embedding.maxTokens ?? 512;
+  if (estimateTokens(text) <= limit) {
+    return text;
+  }
+  const words = text.split(/\s+/);
+  let end = Math.max(16, Math.floor((limit / estimateTokens(text)) * words.length));
+  end = Math.min(words.length, Math.max(end, Math.floor(limit / 1.5)));
+  let slice = words.slice(0, end);
+  while (slice.length > 16 && estimateTokens(slice.join(" ")) > limit) {
+    slice.pop();
+  }
+  return `${slice.join(" ")} …`;
 }
 
 function clampImportance(value?: number) {

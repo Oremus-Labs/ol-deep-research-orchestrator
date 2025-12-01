@@ -35,6 +35,7 @@ const envSchema = z.object({
   MAX_STEPS: z.coerce.number().optional().default(8),
   MAX_JOB_SECONDS: z.coerce.number().optional().default(3600),
   MAX_LLM_TOKENS: z.coerce.number().optional().default(4000),
+  MAX_EMBED_TOKENS: z.coerce.number().optional().default(512),
   MAX_NOTES_FOR_SYNTH: z.coerce.number().optional().default(64),
   MAX_CONTEXT: z.coerce.number().optional().default(131072),
   WARM_NOTES_LIMIT: z.coerce.number().optional().default(6),
@@ -63,6 +64,7 @@ export const config = {
   embedding: {
     url: env.EMBEDDING_URL,
     apiKey: env.EMBEDDING_API_KEY,
+    maxTokens: env.MAX_EMBED_TOKENS,
   },
   qdrant: {
     url: env.QDRANT_URL.replace(/\/$/, ""),
