@@ -138,10 +138,8 @@ export class Worker {
     }
     const combinedContext = contextSections.join("\n\n") || "(none)";
 
-    const plannerPrompt = prompts.planner.replace(
-      "{{MAX_STEPS}}",
-      String(config.worker.maxSteps),
-    );
+    const maxSteps = job.max_steps ?? config.worker.maxSteps;
+    const plannerPrompt = prompts.planner.replace("{{MAX_STEPS}}", String(maxSteps));
 
     const response = await chatCompletion([
       { role: "system", content: plannerPrompt },
@@ -154,7 +152,7 @@ export class Worker {
     try {
       const parsed = JSON.parse(response);
       if (Array.isArray(parsed)) {
-        return parsed.slice(0, config.worker.maxSteps);
+        return parsed.slice(0, maxSteps);
       }
     } catch (error) {
       logger.warn({ error }, "Failed to parse planner output, falling back");
