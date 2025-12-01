@@ -63,3 +63,27 @@ export interface ReportAssets {
     url?: string | null;
   }[];
 }
+
+export interface CitationLedgerRecord {
+  id: string;
+  job_id: string;
+  source_hash: string;
+  source_id?: string | null;
+  citation_number: number;
+  title?: string | null;
+  url?: string | null;
+  accessed_at?: string | null;
+  created_at: string;
+}
+
+export interface SectionDraftRecord {
+  id: string;
+  job_id: string;
+  section_key: string;
+  status: string;
+  tokens: number;
+  content?: string | null;
+  citation_map: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}

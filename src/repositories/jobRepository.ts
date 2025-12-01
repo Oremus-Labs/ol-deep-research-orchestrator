@@ -1,6 +1,12 @@
 import { PoolClient, QueryResult } from "pg";
 import { pool } from "../db";
-import { JobStatus, ResearchJob, SourceRecord } from "../types/job";
+import {
+  CitationLedgerRecord,
+  JobStatus,
+  ResearchJob,
+  SectionDraftRecord,
+  SourceRecord,
+} from "../types/job";
 
 interface EnqueueInput {
   question: string;
@@ -199,4 +205,140 @@ export async function listSourcesByJob(jobId: string): Promise<SourceRecord[]> {
     [jobId],
   );
   return rows;
+}
+
+export async function findCitationByHash(
+  jobId: string,
+  sourceHash: string,
+): Promise<CitationLedgerRecord | null> {
+  const { rows } = await pool.query<CitationLedgerRecord>(
+    `SELECT * FROM citation_ledger WHERE job_id = $1 AND source_hash = $2`,
+    [jobId, sourceHash],
+  );
+  return rows[0] ?? null;
+}
+
+export async function insertCitationLedgerEntry(params: {
+  jobId: string;
+  sourceHash: string;
+  sourceId?: string;
+  citationNumber: number;
+  title?: string;
+  url?: string;
+  accessedAt?: string;
+}): Promise<CitationLedgerRecord> {
+  const { rows } = await pool.query<CitationLedgerRecord>(
+    `INSERT INTO citation_ledger
+     (job_id, source_hash, source_id, citation_number, title, url, accessed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [
+      params.jobId,
+      params.sourceHash,
+      params.sourceId ?? null,
+      params.citationNumber,
+      params.title ?? null,
+      params.url ?? null,
+      params.accessedAt ?? null,
+    ],
+  );
+  return rows[0];
+}
+
+export async function listCitationLedger(
+  jobId: string,
+): Promise<CitationLedgerRecord[]> {
+  const { rows } = await pool.query<CitationLedgerRecord>(
+    `SELECT * FROM citation_ledger WHERE job_id = $1 ORDER BY citation_number`,
+    [jobId],
+  );
+  return rows;
+}
+
+export async function createSectionDraft(params: {
+  jobId: string;
+  sectionKey: string;
+  status?: string;
+  tokens?: number;
+  content?: string;
+  citationMap?: Record<string, unknown>;
+}): Promise<SectionDraftRecord> {
+  const { rows } = await pool.query<SectionDraftRecord>(
+    `INSERT INTO section_drafts
+     (job_id, section_key, status, tokens, content, citation_map)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      params.jobId,
+      params.sectionKey,
+      params.status ?? "pending",
+      params.tokens ?? 0,
+      params.content ?? null,
+      params.citationMap ?? {},
+    ],
+  );
+  return rows[0];
+}
+
+export async function updateSectionDraft(
+  id: string,
+  changes: {
+    status?: string;
+    tokens?: number;
+    content?: string | null;
+    citationMap?: Record<string, unknown>;
+  },
+) {
+  const updates = ["updated_at = now()"];
+  const values: unknown[] = [id];
+  let idx = 2;
+
+  if (changes.status !== undefined) {
+    updates.push(`status = $${idx++}`);
+    values.push(changes.status);
+  }
+  if (changes.tokens !== undefined) {
+    updates.push(`tokens = $${idx++}`);
+    values.push(changes.tokens);
+  }
+  if (changes.content !== undefined) {
+    updates.push(`content = $${idx++}`);
+    values.push(changes.content);
+  }
+  if (changes.citationMap !== undefined) {
+    updates.push(`citation_map = $${idx++}`);
+    values.push(changes.citationMap);
+  }
+
+  if (updates.length === 1) {
+    return;
+  }
+
+  await pool.query(
+    `UPDATE section_drafts
+     SET ${updates.join(", ")}
+     WHERE id = $1`,
+    values,
+  );
+}
+
+export async function listSectionDrafts(
+  jobId: string,
+): Promise<SectionDraftRecord[]> {
+  const { rows } = await pool.query<SectionDraftRecord>(
+    `SELECT * FROM section_drafts WHERE job_id = $1 ORDER BY created_at`,
+    [jobId],
+  );
+  return rows;
+}
+
+export async function getSectionDraft(
+  jobId: string,
+  sectionKey: string,
+): Promise<SectionDraftRecord | null> {
+  const { rows } = await pool.query<SectionDraftRecord>(
+    `SELECT * FROM section_drafts WHERE job_id = $1 AND section_key = $2`,
+    [jobId, sectionKey],
+  );
+  return rows[0] ?? null;
 }
