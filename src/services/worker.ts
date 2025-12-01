@@ -17,6 +17,7 @@ import { putObject } from "./minioClient";
 import { embedText } from "./embeddingClient";
 import { ensureCollection, querySimilarNotes, upsertNoteVector } from "./qdrantClient";
 import { fetch } from "undici";
+import { clampForEmbedding, estimateTokens } from "../utils/text";
 
 interface PlannedStep {
   title: string;
@@ -192,7 +193,7 @@ export class Worker {
     for (let i = 0; i < Math.min(results.length, 3); i += 1) {
       const result = results[i];
       try {
-        const fetched = await n8nFetchUrl(result.url);
+        const fetched = await this.fetchSourceWithFallback(result.url);
         const key = `raw/${job.id}/${stepOrder}-${i + 1}.json`;
         const rawUrl = await putObject(key, JSON.stringify(fetched));
         sources.push({
@@ -307,6 +308,47 @@ export class Worker {
         snippet: item.content,
       })) ?? []
     );
+  }
+
+  private async fetchSourceWithFallback(url: string) {
+    try {
+      return await n8nFetchUrl(url);
+    } catch (error) {
+      logger.warn({ error, url }, "n8n fetch failed, falling back to direct fetch");
+      return this.directFetchUrl(url);
+    }
+  }
+
+  private async directFetchUrl(url: string) {
+    const response = await fetch(url, {
+      redirect: "follow",
+      headers: {
+        "user-agent": "DeepResearchBot/1.0 (+https://oremuslabs.com)",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Direct fetch failed (${response.status})`);
+    }
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    if (!contentType || contentType.includes("pdf") || contentType.includes("octet-stream")) {
+      throw new Error(`Unsupported content type: ${contentType || "unknown"}`);
+    }
+    const body = await response.text();
+    const cleanBody = body
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const titleMatch = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : url;
+    return {
+      url,
+      title,
+      content: cleanBody,
+      statusCode: response.status,
+    };
   }
 
   private async summarizeStep(
@@ -493,25 +535,6 @@ export class Worker {
       logger.error({ error }, "Embedding/Qdrant failed for note");
     }
   }
-}
-
-function estimateTokens(text: string) {
-  return Math.ceil(text.split(/\s+/).length * 1.3);
-}
-
-function clampForEmbedding(text: string) {
-  const limit = config.embedding.maxTokens ?? 512;
-  if (estimateTokens(text) <= limit) {
-    return text;
-  }
-  const words = text.split(/\s+/);
-  let end = Math.max(16, Math.floor((limit / estimateTokens(text)) * words.length));
-  end = Math.min(words.length, Math.max(end, Math.floor(limit / 1.5)));
-  let slice = words.slice(0, end);
-  while (slice.length > 16 && estimateTokens(slice.join(" ")) > limit) {
-    slice.pop();
-  }
-  return `${slice.join(" ")} …`;
 }
 
 function clampImportance(value?: number) {
