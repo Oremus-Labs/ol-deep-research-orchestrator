@@ -18,6 +18,7 @@ import { embedText } from "./embeddingClient";
 import { ensureCollection, querySimilarNotes, upsertNoteVector } from "./qdrantClient";
 import { fetch } from "undici";
 import { clampForEmbedding, estimateTokens } from "../utils/text";
+import { jobDurationHistogram, jobStatusCounter, recordToolError, startToolTimer } from "../metrics";
 
 interface PlannedStep {
   title: string;
@@ -89,8 +90,12 @@ export class Worker {
   }
 
   private async processJob(job: ResearchJob) {
+    const stopJobTimer = jobDurationHistogram.startTimer();
+    jobStatusCounter.labels("started").inc();
     const stepsPlan = await this.planSteps(job);
     if (!stepsPlan.length) {
+      jobStatusCounter.labels("error").inc();
+      stopJobTimer({ status: "error" });
       throw new Error("No steps planned");
     }
 
@@ -105,15 +110,23 @@ export class Worker {
       await this.executeStep(job, step.plan, step.record.id, step.record.step_order);
     }
 
-    const { report: finalReport, critic } = await this.buildFinalReport(job);
-    await updateJobStatus(job.id, "completed", {
-      final_report: finalReport,
-      completed_at: new Date().toISOString(),
-    });
-    if (critic) {
-      await this.recordCriticFeedback(job, critic);
+    try {
+      const { report: finalReport, critic } = await this.buildFinalReport(job);
+      await updateJobStatus(job.id, "completed", {
+        final_report: finalReport,
+        completed_at: new Date().toISOString(),
+      });
+      if (critic) {
+        await this.recordCriticFeedback(job, critic);
+      }
+      await this.recordCrossSummary(job, finalReport);
+      jobStatusCounter.labels("completed").inc();
+      stopJobTimer({ status: "completed" });
+    } catch (error) {
+      jobStatusCounter.labels("error").inc();
+      stopJobTimer({ status: "error" });
+      throw error;
     }
-    await this.recordCrossSummary(job, finalReport);
     logger.info({ jobId: job.id }, "Job completed");
   }
 
@@ -275,6 +288,7 @@ export class Worker {
           if (results.length) return results;
         }
       } catch (error) {
+        recordToolError(tool ?? "unknown", "search");
         logger.warn({ error, tool }, "search tool failed");
       }
     }
@@ -296,59 +310,72 @@ export class Worker {
 
   private async searchSearx(query: string) {
     const endpoint = `${config.search.searxBaseUrl}/search?q=${encodeURIComponent(query)}&format=json`;
-    const response = await fetch(endpoint);
-    if (!response.ok) {
-      throw new Error(`SearXNG returned ${response.status}`);
+    const stopTimer = startToolTimer("searxng");
+    try {
+      const response = await fetch(endpoint);
+      if (!response.ok) {
+        recordToolError("searxng", "http");
+        throw new Error(`SearXNG returned ${response.status}`);
+      }
+      const data = (await response.json()) as { results?: { title: string; url: string; content?: string }[] };
+      return (
+        data.results?.map((item) => ({
+          title: item.title,
+          url: item.url,
+          snippet: item.content,
+        })) ?? []
+      );
+    } finally {
+      stopTimer();
     }
-    const data = (await response.json()) as { results?: { title: string; url: string; content?: string }[] };
-    return (
-      data.results?.map((item) => ({
-        title: item.title,
-        url: item.url,
-        snippet: item.content,
-      })) ?? []
-    );
   }
 
   private async fetchSourceWithFallback(url: string) {
     try {
       return await n8nFetchUrl(url);
     } catch (error) {
+      recordToolError("n8n_fetch", "workflow");
       logger.warn({ error, url }, "n8n fetch failed, falling back to direct fetch");
       return this.directFetchUrl(url);
     }
   }
 
   private async directFetchUrl(url: string) {
-    const response = await fetch(url, {
-      redirect: "follow",
-      headers: {
-        "user-agent": "DeepResearchBot/1.0 (+https://oremuslabs.com)",
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`Direct fetch failed (${response.status})`);
+    const stopTimer = startToolTimer("http_fetch");
+    try {
+      const response = await fetch(url, {
+        redirect: "follow",
+        headers: {
+          "user-agent": "DeepResearchBot/1.0 (+https://oremuslabs.com)",
+        },
+      });
+      if (!response.ok) {
+        recordToolError("http_fetch", "http");
+        throw new Error(`Direct fetch failed (${response.status})`);
+      }
+      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+      if (!contentType || contentType.includes("pdf") || contentType.includes("octet-stream")) {
+        throw new Error(`Unsupported content type: ${contentType || "unknown"}`);
+      }
+      const body = await response.text();
+      const cleanBody = body
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const titleMatch = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      const title = titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : url;
+      return {
+        url,
+        title,
+        content: cleanBody,
+        statusCode: response.status,
+      };
+    } finally {
+      stopTimer();
     }
-    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-    if (!contentType || contentType.includes("pdf") || contentType.includes("octet-stream")) {
-      throw new Error(`Unsupported content type: ${contentType || "unknown"}`);
-    }
-    const body = await response.text();
-    const cleanBody = body
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const titleMatch = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    const title = titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : url;
-    return {
-      url,
-      title,
-      content: cleanBody,
-      statusCode: response.status,
-    };
   }
 
   private async summarizeStep(

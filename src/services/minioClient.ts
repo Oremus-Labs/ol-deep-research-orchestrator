@@ -1,5 +1,6 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { config } from "../config";
+import { recordMinioUpload } from "../metrics";
 
 const url = new URL(config.minio.endpoint);
 
@@ -18,14 +19,20 @@ export async function putObject(
   body: string | Uint8Array,
   contentType = "application/json",
 ) {
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: config.minio.bucket,
-      Key: key,
-      Body: typeof body === "string" ? Buffer.from(body) : body,
-      ContentType: contentType,
-    }),
-  );
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: config.minio.bucket,
+        Key: key,
+        Body: typeof body === "string" ? Buffer.from(body) : body,
+        ContentType: contentType,
+      }),
+    );
+    recordMinioUpload("success");
+  } catch (error) {
+    recordMinioUpload("error");
+    throw error;
+  }
   const protocol = config.minio.useSSL ? "https" : "http";
   return `${protocol}://${url.host}/${config.minio.bucket}/${key}`;
 }

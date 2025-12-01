@@ -2,12 +2,14 @@ import { fetch } from "undici";
 import { config } from "../config";
 import { logger } from "../logger";
 import { clampForEmbedding } from "../utils/text";
+import { recordToolError, startToolTimer } from "../metrics";
 
 export async function embedText(text: string) {
   let payload = clampForEmbedding(text, config.embedding.maxTokens);
   let attemptLimit = Math.max(64, config.embedding.maxTokens ?? 512);
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
+    const stopTimer = startToolTimer("embedding");
     const response = await fetch(config.embedding.url, {
       method: "POST",
       headers: {
@@ -18,7 +20,9 @@ export async function embedText(text: string) {
     });
 
     if (response.ok) {
-      return parseEmbedding(await response.json());
+      const parsed = await response.json();
+      stopTimer();
+      return parseEmbedding(parsed);
     }
 
     const msg = await response.text();
@@ -31,13 +35,18 @@ export async function embedText(text: string) {
       attemptLimit = Math.max(32, Math.floor(attemptLimit * 0.75));
       const shorter = clampForEmbedding(payload, attemptLimit);
       if (shorter.length >= payload.length) {
+        recordToolError("embedding", "clamp_exhausted");
+        stopTimer();
         logger.error({ status: response.status, msg }, "Embedding clamp exhausted");
         break;
       }
       payload = shorter;
+      stopTimer();
       continue;
     }
 
+    recordToolError("embedding", "http");
+    stopTimer();
     logger.error({ status: response.status, msg }, "Embedding request failed");
     throw new Error("Embedding request failed");
   }

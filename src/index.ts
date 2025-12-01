@@ -6,6 +6,7 @@ import { logger } from "./logger";
 import { runMigrations } from "./migrate";
 import { enqueueJob, getJob, listNotes, listSteps, updateJobStatus } from "./repositories/jobRepository";
 import { Worker } from "./services/worker";
+import { metricsRegistry } from "./metrics";
 
 const worker = new Worker();
 
@@ -30,6 +31,10 @@ async function buildServer() {
   });
 
   app.get("/healthz", async () => ({ status: "ok" }));
+  app.get("/metrics", async (_, reply) => {
+    reply.header("content-type", metricsRegistry.contentType);
+    return metricsRegistry.metrics();
+  });
 
   const createSchema = z.object({
     question: z.string().min(4),
