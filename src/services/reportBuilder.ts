@@ -92,9 +92,9 @@ function renderMarkdown(
 
   const sections: string[] = [];
   sections.push(`# Deep Research Report`);
-  sections.push(`- **Job ID:** ${job.id}`);
-  sections.push(`- **Question:** ${job.question}`);
-  sections.push(`- **Generated:** ${generated}`);
+  sections.push(`**Job ID:** ${job.id}`);
+  sections.push(`**Question:** ${job.question}`);
+  sections.push(`**Generated:** ${generated}`);
   sections.push(``);
   sections.push(`## Executive Summary`);
   sections.push(finalReport.trim());
