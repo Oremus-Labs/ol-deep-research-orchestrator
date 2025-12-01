@@ -138,6 +138,7 @@ export class Worker {
     const stopJobTimer = jobDurationHistogram.startTimer();
     jobStatusCounter.labels("started").inc();
     const existingSteps = await listSteps(job.id);
+    logger.info({ jobId: job.id, existingSteps: existingSteps.length }, "Loaded existing steps for job");
     let steps: { plan: PlannedStep; record: ResearchStep }[] = [];
 
     if (!existingSteps.length) {

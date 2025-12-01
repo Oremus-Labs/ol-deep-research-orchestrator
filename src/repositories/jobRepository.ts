@@ -422,11 +422,20 @@ export async function rescueStaleJobs(params: RescueParams) {
     return [];
   }
 
+  const jobIds = rescues.map((r) => r.id);
   await pool.query(
     `UPDATE research_jobs
         SET status='queued', started_at = NULL, updated_at = now(), last_heartbeat = now()
       WHERE id = ANY($1::uuid[])`,
-    [rescues.map((r) => r.id)],
+    [jobIds],
+  );
+
+  await pool.query(
+    `UPDATE research_steps
+        SET status='pending', updated_at = now()
+      WHERE job_id = ANY($1::uuid[])
+        AND status = 'running'`,
+    [jobIds],
   );
 
   return rescues;
