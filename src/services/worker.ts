@@ -1,4 +1,4 @@
-import { ResearchJob } from "../types/job";
+import { NoteRecord, ResearchJob } from "../types/job";
 import { config } from "../config";
 import { logger } from "../logger";
 import {
@@ -15,7 +15,7 @@ import { prompts } from "../prompts";
 import { n8nFetchUrl, n8nWebSearch } from "./n8nClient";
 import { putObject } from "./minioClient";
 import { embedText } from "./embeddingClient";
-import { ensureCollection, upsertNoteVector } from "./qdrantClient";
+import { ensureCollection, querySimilarNotes, upsertNoteVector } from "./qdrantClient";
 import { fetch } from "undici";
 
 interface PlannedStep {
@@ -28,6 +28,20 @@ interface SummarizerOutput {
   page_notes?: { label?: string; summary: string; importance?: number }[];
   step_summary?: string;
   step_importance?: number;
+}
+
+interface WarmNote {
+  id: string | number;
+  content: string;
+  role?: string;
+  importance: number;
+  jobId?: string;
+}
+
+interface CriticFeedback {
+  issues?: string[];
+  follow_up?: string[];
+  limitations?: string;
 }
 
 export class Worker {
@@ -90,11 +104,15 @@ export class Worker {
       await this.executeStep(job, step.plan, step.record.id, step.record.step_order);
     }
 
-    const finalReport = await this.buildFinalReport(job);
+    const { report: finalReport, critic } = await this.buildFinalReport(job);
     await updateJobStatus(job.id, "completed", {
       final_report: finalReport,
       completed_at: new Date().toISOString(),
     });
+    if (critic) {
+      await this.recordCriticFeedback(job, critic);
+    }
+    await this.recordCrossSummary(job, finalReport);
     logger.info({ jobId: job.id }, "Job completed");
   }
 
@@ -104,6 +122,21 @@ export class Worker {
       .filter((n) => n.role === "cross_job_summary" || n.role === "step_summary")
       .map((n, idx) => `Note ${idx + 1}: ${n.content}`)
       .join("\n");
+    const warmNotes = await this.fetchWarmNotes(job);
+    const warmContext = warmNotes
+      .map(
+        (note, idx) =>
+          `Archive Note ${idx + 1} (importance ${note.importance}): ${note.content}`,
+      )
+      .join("\n");
+    const contextSections = [];
+    if (priorContext) {
+      contextSections.push("Job Notes:\n" + priorContext);
+    }
+    if (warmContext) {
+      contextSections.push("Relevant Archive Notes:\n" + warmContext);
+    }
+    const combinedContext = contextSections.join("\n\n") || "(none)";
 
     const plannerPrompt = prompts.planner.replace(
       "{{MAX_STEPS}}",
@@ -114,7 +147,7 @@ export class Worker {
       { role: "system", content: plannerPrompt },
       {
         role: "user",
-        content: `Question: ${job.question}\nContext:\n${priorContext || "(none)"}`,
+        content: `Question: ${job.question}\nContext:\n${combinedContext}`,
       },
     ]);
 
@@ -180,11 +213,12 @@ export class Worker {
     const pageNotes = summary.page_notes ?? [];
     for (let i = 0; i < pageNotes.length; i += 1) {
       const note = pageNotes[i];
+      const importance = clampImportance(note.importance);
       const record = await insertNote({
         jobId: job.id,
         stepId,
         role: "page_summary",
-        importance: note.importance ?? 3,
+        importance,
         tokenCount: estimateTokens(note.summary),
         content: note.summary,
         sourceUrl: sources[i]?.url,
@@ -201,18 +235,19 @@ export class Worker {
         job_id: job.id,
         step_id: stepId,
         role: "page_summary",
-        importance: note.importance ?? 3,
+        importance,
         url: sources[i]?.url,
         title: sources[i]?.title,
       });
     }
 
     if (summary.step_summary) {
+      const stepImportance = clampImportance(summary.step_importance);
       const record = await insertNote({
         jobId: job.id,
         stepId,
         role: "step_summary",
-        importance: summary.step_importance ?? 3,
+        importance: stepImportance,
         tokenCount: estimateTokens(summary.step_summary),
         content: summary.step_summary,
       });
@@ -220,7 +255,7 @@ export class Worker {
         job_id: job.id,
         step_id: stepId,
         role: "step_summary",
-        importance: summary.step_importance ?? 3,
+        importance: stepImportance,
       });
     }
 
@@ -308,22 +343,51 @@ export class Worker {
     }
   }
 
-  private async buildFinalReport(job: ResearchJob) {
+  private async fetchWarmNotes(job: ResearchJob): Promise<WarmNote[]> {
+    try {
+      const vector = await embedText(job.question);
+      if (!vector.length) {
+        return [];
+      }
+      const hits = await querySimilarNotes({
+        vector,
+        limit: config.worker.warmNotesLimit,
+        minImportance: config.worker.warmImportanceMin,
+        excludeJobId: job.id,
+      });
+      return hits.map((hit) => ({
+        id: hit.id,
+        content: String(hit.payload?.content ?? ""),
+        importance: clampImportance(hit.payload?.importance as number),
+        role: (hit.payload?.role as string) ?? undefined,
+        jobId: (hit.payload?.job_id as string) ?? undefined,
+      }));
+    } catch (error) {
+      logger.warn({ error, jobId: job.id }, "warm note retrieval failed");
+      return [];
+    }
+  }
+
+  private async buildFinalReport(job: ResearchJob): Promise<{
+    report: string;
+    critic?: CriticFeedback;
+  }> {
     const notes = await listNotes(job.id);
-    const selected: typeof notes = [];
+    const selected = this.selectNotesForSynthesis(notes);
     let budget = config.llm.maxContext - 2000 - config.llm.maxTokens;
-    for (const note of notes) {
-      if (selected.length >= config.worker.maxNotesForSynth) {
+    const packed: typeof notes = [];
+    for (const note of selected) {
+      if (packed.length >= config.worker.maxNotesForSynth) {
         break;
       }
       if (budget - note.token_count <= 0) {
         continue;
       }
-      selected.push(note);
+      packed.push(note);
       budget -= note.token_count;
     }
 
-    const notesText = selected
+    const notesText = packed
       .map((note, idx) => `Note ${idx + 1} (${note.role}, importance ${note.importance}): ${note.content}`)
       .join("\n\n");
 
@@ -341,17 +405,72 @@ export class Worker {
       { role: "user", content: criticInput },
     ]);
 
-    let critic;
+    let critic: CriticFeedback | undefined;
     try {
       critic = JSON.parse(criticRaw);
     } catch (error) {
       logger.warn({ error }, "Critic output parse failed");
     }
 
+    let finalReport = draft;
     if (critic?.limitations) {
-      return `${draft}\n\nLimitations & Critic Notes:\n${critic.limitations}\nIssues: ${(critic.issues || []).join(", ")}`;
+      finalReport = `${draft}\n\nLimitations & Critic Notes:\n${critic.limitations}\nIssues: ${(critic.issues || []).join(", ")}`;
     }
-    return draft;
+    return { report: finalReport, critic };
+  }
+
+  private selectNotesForSynthesis(notes: NoteRecord[]) {
+    return [...notes].sort((a, b) => {
+      if (b.importance !== a.importance) {
+        return b.importance - a.importance;
+      }
+      return b.token_count - a.token_count;
+    });
+  }
+
+  private async recordCriticFeedback(job: ResearchJob, critic: CriticFeedback) {
+    const parts: string[] = [];
+    if (critic.limitations) {
+      parts.push(`Limitations: ${critic.limitations}`);
+    }
+    if (critic.issues?.length) {
+      parts.push(`Issues: ${critic.issues.join("; ")}`);
+    }
+    if (critic.follow_up?.length) {
+      parts.push(`Follow-up ideas: ${critic.follow_up.join("; ")}`);
+    }
+    const text = parts.join("\n").trim();
+    if (!text) {
+      return;
+    }
+    const note = await insertNote({
+      jobId: job.id,
+      role: "critic_note",
+      importance: 3,
+      tokenCount: estimateTokens(text),
+      content: text,
+    });
+    await this.indexNote(note.id, text, {
+      job_id: job.id,
+      role: "critic_note",
+      importance: 3,
+    });
+  }
+
+  private async recordCrossSummary(job: ResearchJob, report: string) {
+    const text = `Question: ${job.question}\nSummary:\n${report}`;
+    const note = await insertNote({
+      jobId: job.id,
+      role: "cross_job_summary",
+      importance: 4,
+      tokenCount: estimateTokens(text),
+      content: text,
+    });
+    await this.indexNote(note.id, text, {
+      job_id: job.id,
+      role: "cross_job_summary",
+      importance: 4,
+    });
   }
 
   private async indexNote(
@@ -364,7 +483,10 @@ export class Worker {
       if (vector.length === 0) {
         return;
       }
-      await upsertNoteVector(noteId, vector, payload);
+      await upsertNoteVector(noteId, vector, {
+        ...payload,
+        content: text,
+      });
     } catch (error) {
       logger.error({ error }, "Embedding/Qdrant failed for note");
     }
@@ -373,4 +495,9 @@ export class Worker {
 
 function estimateTokens(text: string) {
   return Math.ceil(text.split(/\s+/).length * 1.3);
+}
+
+function clampImportance(value?: number) {
+  const num = Number.isFinite(value) ? Number(value) : 3;
+  return Math.min(5, Math.max(1, Math.round(num)));
 }

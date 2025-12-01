@@ -41,3 +41,47 @@ export async function upsertNoteVector(
     ],
   });
 }
+
+export async function querySimilarNotes(params: {
+  vector: number[];
+  limit: number;
+  minImportance: number;
+  excludeJobId?: string;
+}) {
+  const filter: Record<string, unknown> = {
+    must: [
+      {
+        key: "importance",
+        range: { gte: params.minImportance },
+      },
+      {
+        key: "role",
+        match: { any: ["step_summary", "cross_job_summary"] },
+      },
+    ],
+  };
+  if (params.excludeJobId) {
+    (filter as Record<string, unknown>).must_not = [
+      {
+        key: "job_id",
+        match: { value: params.excludeJobId },
+      },
+    ];
+  }
+
+  const response = await qdrant.search(config.qdrant.collection, {
+    vector: params.vector,
+    limit: params.limit,
+    filter,
+    with_payload: true,
+    with_vector: false,
+  });
+
+  return response
+    .map((item) => ({
+      id: item.id,
+      score: item.score,
+      payload: item.payload ?? {},
+    }))
+    .filter((item) => Boolean(item.payload?.content));
+}
