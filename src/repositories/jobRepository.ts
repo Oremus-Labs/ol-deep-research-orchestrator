@@ -68,7 +68,8 @@ export async function claimNextQueuedJob(client?: PoolClient) {
     }
     const current = job.rows[0];
     await runner.query(
-      `UPDATE research_jobs SET status='running', started_at = now(), updated_at = now()
+      `UPDATE research_jobs
+          SET status='running', started_at = now(), updated_at = now(), last_heartbeat = now()
        WHERE id = $1`,
       [current.id],
     );
@@ -89,7 +90,7 @@ export async function updateJobStatus(
   status: JobStatus,
   fields: Partial<ResearchJob> = {},
 ) {
-  const updates: string[] = ["status = $2", "updated_at = now()"];
+  const updates: string[] = ["status = $2", "updated_at = now()", "last_heartbeat = now()"];
   const values: unknown[] = [jobId, status];
   let idx = values.length + 1;
   for (const [key, value] of Object.entries(fields)) {
@@ -349,4 +350,83 @@ export async function getSectionDraft(
     [jobId, sectionKey],
   );
   return rows[0] ?? null;
+}
+
+export async function touchJobHeartbeat(jobId: string) {
+  await pool.query(
+    `UPDATE research_jobs SET last_heartbeat = now(), updated_at = now() WHERE id = $1`,
+    [jobId],
+  );
+}
+
+interface RescueParams {
+  startThresholdMs: number;
+  heartbeatThresholdMs: number;
+  graceMs: number;
+}
+
+export async function rescueStaleJobs(params: RescueParams) {
+  const { rows } = await pool.query<{
+    id: string;
+    started_at: string | null;
+    created_at: string;
+    updated_at: string;
+    last_heartbeat: string | null;
+    max_duration_seconds: string | null;
+    has_steps: boolean;
+  }>(
+    `SELECT j.id,
+            j.started_at,
+            j.created_at,
+            j.updated_at,
+            j.last_heartbeat,
+            j.max_duration_seconds,
+            EXISTS (SELECT 1 FROM research_steps s WHERE s.job_id = j.id) AS has_steps
+       FROM research_jobs j
+      WHERE j.status = 'running'`,
+  );
+
+  const now = Date.now();
+  const rescues: { id: string; reason: "start" | "heartbeat" }[] = [];
+
+  const toMs = (value?: string | null) => (value ? Date.parse(value) : undefined);
+
+  for (const row of rows) {
+    const startedMs = toMs(row.started_at) ?? toMs(row.created_at);
+    if (!row.has_steps) {
+      if (startedMs && now - startedMs > params.startThresholdMs) {
+        rescues.push({ id: row.id, reason: "start" });
+      }
+      continue;
+    }
+
+    const heartbeatBase = toMs(row.last_heartbeat) ?? toMs(row.updated_at) ?? startedMs;
+    if (!heartbeatBase) {
+      continue;
+    }
+    let threshold = params.heartbeatThresholdMs;
+    const maxDurationSeconds =
+      row.max_duration_seconds === null || row.max_duration_seconds === undefined
+        ? null
+        : Number(row.max_duration_seconds);
+    if (typeof maxDurationSeconds === "number" && Number.isFinite(maxDurationSeconds)) {
+      threshold = Math.min(threshold, maxDurationSeconds * 1000 + params.graceMs);
+    }
+    if (now - heartbeatBase > threshold) {
+      rescues.push({ id: row.id, reason: "heartbeat" });
+    }
+  }
+
+  if (!rescues.length) {
+    return [];
+  }
+
+  await pool.query(
+    `UPDATE research_jobs
+        SET status='queued', started_at = NULL, updated_at = now(), last_heartbeat = now()
+      WHERE id = ANY($1::uuid[])`,
+    [rescues.map((r) => r.id)],
+  );
+
+  return rescues;
 }

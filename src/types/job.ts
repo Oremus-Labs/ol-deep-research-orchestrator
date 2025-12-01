@@ -16,6 +16,7 @@ export interface ResearchJob {
   started_at?: string | null;
   completed_at?: string | null;
   error?: string | null;
+  last_heartbeat?: string | null;
 }
 
 export interface ResearchStep {

@@ -40,6 +40,13 @@ export const minioUploadsCounter = new Counter({
   registers: [metricsRegistry],
 });
 
+export const jobRescueCounter = new Counter({
+  name: "deep_research_job_rescues_total",
+  help: "Jobs automatically requeued due to staleness",
+  labelNames: ["reason"],
+  registers: [metricsRegistry],
+});
+
 export function startToolTimer(tool: string) {
   return toolLatencyHistogram.startTimer({ tool });
 }

@@ -12,6 +12,8 @@ import {
   insertCitationLedgerEntry,
   insertNote,
   insertStep,
+  rescueStaleJobs,
+  touchJobHeartbeat,
   listNotes,
   listSourcesByJob,
   updateJobStatus,
@@ -26,7 +28,13 @@ import { embedText } from "./embeddingClient";
 import { ensureCollection, querySimilarNotes, upsertNoteVector } from "./qdrantClient";
 import { fetch } from "undici";
 import { clampForEmbedding, estimateTokens } from "../utils/text";
-import { jobDurationHistogram, jobStatusCounter, recordToolError, startToolTimer } from "../metrics";
+import {
+  jobDurationHistogram,
+  jobRescueCounter,
+  jobStatusCounter,
+  recordToolError,
+  startToolTimer,
+} from "../metrics";
 import { buildReportArtifacts } from "./reportBuilder";
 
 interface PlannedStep {
@@ -93,6 +101,19 @@ export class Worker {
   }
 
   private async tick() {
+    try {
+      const rescues = await rescueStaleJobs({
+        startThresholdMs: config.worker.rescue.startSeconds * 1000,
+        heartbeatThresholdMs: config.worker.rescue.heartbeatSeconds * 1000,
+        graceMs: config.worker.rescue.graceSeconds * 1000,
+      });
+      if (rescues.length) {
+        rescues.forEach((rescue) => jobRescueCounter.labels(rescue.reason).inc());
+        logger.warn({ rescues }, "Rescued stale jobs");
+      }
+    } catch (error) {
+      logger.error({ error }, "Failed to evaluate stale jobs");
+    }
     if (this.running >= config.worker.maxConcurrent) {
       return;
     }
@@ -121,6 +142,7 @@ export class Worker {
       stopJobTimer({ status: "error" });
       throw new Error("No steps planned");
     }
+    await touchJobHeartbeat(job.id);
 
     const steps = [];
     for (let i = 0; i < stepsPlan.length; i += 1) {
@@ -131,6 +153,7 @@ export class Worker {
 
     for (const step of steps) {
       await this.executeStep(job, step.plan, step.record.id, step.record.step_order);
+      await touchJobHeartbeat(job.id);
     }
 
     try {
@@ -140,6 +163,7 @@ export class Worker {
       const { report: finalReport, critic } = config.features.longformEnabled
         ? await this.buildLongformReport(job)
         : await this.buildFinalReport(job);
+      await touchJobHeartbeat(job.id);
       if (critic) {
         await this.recordCriticFeedback(job, critic);
       }
@@ -151,6 +175,7 @@ export class Worker {
         notes,
         sources,
       });
+      await touchJobHeartbeat(job.id);
       await updateJobStatus(job.id, "completed", {
         final_report: finalReport,
         report_assets: assets,
@@ -225,10 +250,12 @@ export class Worker {
     stepOrder: number,
   ) {
     await updateStep(stepId, "running");
+    await touchJobHeartbeat(job.id);
     const query = `${job.question} :: ${plan.objective ?? "research"}`;
     const results = await this.runSearch(plan.tool_hint, query);
     if (!results.length) {
       await updateStep(stepId, "partial", { error: "No search results" });
+      await touchJobHeartbeat(job.id);
       return;
     }
 
@@ -311,6 +338,7 @@ export class Worker {
     }
 
     await updateStep(stepId, "completed", { sources: sources.length });
+    await touchJobHeartbeat(job.id);
   }
 
   private async runSearch(toolHint = "searxng", query: string) {
@@ -493,6 +521,7 @@ export class Worker {
       if (content) {
         renderedSections.push(content);
       }
+      await touchJobHeartbeat(job.id);
     }
 
     const combined = renderedSections.join("\n\n").trim();
@@ -547,6 +576,7 @@ export class Worker {
       content,
       citationMap: { citations: citationMap },
     });
+    await touchJobHeartbeat(job.id);
 
     logger.info({ jobId: job.id, section: spec.key }, "Section draft completed");
     return content;
@@ -640,8 +670,10 @@ export class Worker {
         content: `Question: ${job.question}\nEvidence:\n${notesText}`,
       },
     ]);
+    await touchJobHeartbeat(job.id);
 
     const critic = await this.runCriticEvaluation(draft, notesText);
+    await touchJobHeartbeat(job.id);
     return { report: this.mergeCriticIntoDraft(draft, critic), critic };
   }
 
@@ -682,6 +714,7 @@ export class Worker {
       role: "critic_note",
       importance: 3,
     });
+    await touchJobHeartbeat(job.id);
   }
 
   private async recordCrossSummary(job: ResearchJob, report: string) {
@@ -699,6 +732,7 @@ export class Worker {
       role: "cross_job_summary",
       importance: 4,
     });
+    await touchJobHeartbeat(job.id);
   }
 
   private async runCriticEvaluation(draft: string, notesText: string) {
