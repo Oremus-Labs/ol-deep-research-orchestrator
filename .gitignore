@@ -1,5 +1,12 @@
 node_modules
 dist
+ui/node_modules
+ui/dist
+.tsbuildinfo
+ui/*.tsbuildinfo
+ui/vite.config.js*
+ui/src/*.d.ts
+ui/src/*.js
 .DS_Store
 .env
 coverage

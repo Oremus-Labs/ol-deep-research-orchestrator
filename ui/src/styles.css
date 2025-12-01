@@ -1,0 +1,309 @@
+:root {
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #e2e8f0;
+  background-color: #0f172a;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0f172a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  flex: 1;
+  max-width: 420px;
+  padding: 1.5rem;
+  background: #0b1120;
+  border-right: 1px solid #1e293b;
+  overflow-y: auto;
+}
+
+.main-content {
+  flex: 2;
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+
+input, select, textarea, button {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.section {
+  margin-bottom: 1.5rem;
+}
+
+.card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 0.75rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  text-transform: capitalize;
+}
+
+.status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  display: inline-flex;
+  background: currentColor;
+}
+
+.status-badge.status-queued { background: rgba(14, 165, 233, 0.2); color: #0ea5e9; }
+.status-badge.status-running { background: rgba(250, 204, 21, 0.2); color: #facc15; }
+.status-badge.status-completed { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+.status-badge.status-error { background: rgba(248, 113, 113, 0.2); color: #f87171; }
+.status-badge.status-cancelled { background: rgba(148, 163, 184, 0.2); color: #94a3b8; }
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #1f2937;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #06b6d4, #22d3ee);
+}
+
+.steps-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.steps-list li {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #1f2937;
+}
+
+.report-container {
+  background: #0b1120;
+  border: 1px solid #1e293b;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  color: #e2e8f0;
+}
+
+.report-container h1,
+.report-container h2,
+.report-container h3 {
+  color: #f8fafc;
+}
+
+.report-container pre {
+  background: #020617;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+}
+
+.assets-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.assets-table th,
+.assets-table td {
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+}
+
+.assets-table th {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.metadata-item {
+  padding: 0.5rem 0;
+}
+
+.metadata-item span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.metadata-item strong {
+  color: #e2e8f0;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.form-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.form-field label {
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.form-field input,
+.form-field textarea,
+.form-field select {
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid #1e293b;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.primary-btn {
+  padding: 0.65rem 1rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  color: white;
+  font-weight: 600;
+}
+
+.ghost-btn {
+  padding: 0.65rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid #1e293b;
+  background: transparent;
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
+.secondary-text {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.job-id {
+  font-family: "JetBrains Mono", "Fira Mono", monospace;
+  font-size: 0.85rem;
+  color: #38bdf8;
+}
+
+.log-panel {
+  background: #0b1120;
+  border: 1px solid #1e293b;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.log-entry {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #cbd5f5;
+  border-bottom: 1px solid #1f2937;
+  padding: 0.35rem 0;
+}
+
+.log-entry span {
+  color: #94a3b8;
+  min-width: 110px;
+}
+
+.asset-link {
+  color: #38bdf8;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.citations-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+}
+
+.citations-list li {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #1f2937;
+}
+
+.status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.placeholder-card {
+  text-align: center;
+}
+
+.markdown-empty {
+  font-style: italic;
+  color: #94a3b8;
+}
+
+.step-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.status-pill {
+  border-radius: 999px;
+  padding: 0.2rem 0.75rem;
+  border: 1px solid #1f2937;
+  text-transform: capitalize;
+  font-size: 0.85rem;
+}
+
+.status-pill.status-completed { background: rgba(34, 197, 94, 0.2); color: #22c55e; border: none; }
+.status-pill.status-running { background: rgba(250, 204, 21, 0.2); color: #facc15; border: none; }
+.status-pill.status-queued { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: none; }
+.status-pill.status-error { background: rgba(248, 113, 113, 0.2); color: #f87171; border: none; }
+.status-pill.status-cancelled { background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: none; }
+.status-pill.status-partial { background: rgba(14, 165, 233, 0.2); color: #0ea5e9; border: none; }
+.status-pill.status-pending { background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: none; }
+
+.error-text {
+  color: #f87171;
+  font-weight: 600;
+}

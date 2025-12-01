@@ -1,11 +1,13 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+COPY ui/package*.json ./ui/
+RUN npm ci && npm --prefix ui ci
 COPY tsconfig.json ./
 COPY src ./src
 COPY prompts ./prompts
 COPY migrations ./migrations
+COPY ui ./ui
 RUN npm run build
 
 FROM node:20-slim
@@ -23,6 +25,7 @@ ENV NODE_ENV=production
 COPY --from=builder /app/package*.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/ui/dist ./ui-dist
 COPY --from=builder /app/prompts ./prompts
 COPY --from=builder /app/migrations ./migrations
 EXPOSE 8080

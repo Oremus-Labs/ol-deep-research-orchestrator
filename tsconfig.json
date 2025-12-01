@@ -9,7 +9,6 @@
     // See also https://aka.ms/tsconfig/module
     "module": "commonjs",
     "target": "es2020",
-    "types": [],
     "lib": ["es2020"],
     "types": ["node"],
 
@@ -37,5 +36,7 @@
 
     "esModuleInterop": true,
     "resolveJsonModule": true,
-  }
+  },
+  "include": ["src/**/*.ts", "migrations/**/*.ts", "prompts/**/*.ts"],
+  "exclude": ["ui"]
 }
