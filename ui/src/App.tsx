@@ -487,6 +487,11 @@ export default function App() {
     }));
   }, [job]);
 
+  const allStepsCompleted = useMemo(() => {
+    if (!job || !job.steps.length) return false;
+    return job.steps.every((step) => step.status === "completed" || step.status === "partial");
+  }, [job]);
+
   const progressPercent = useMemo(() => {
     if (!job) return 0;
     if (!job.progress.total_steps && job.status === "completed") {
@@ -500,6 +505,36 @@ export default function App() {
       Math.round((job.progress.completed_steps / job.progress.total_steps) * 100),
     );
   }, [job]);
+
+  const adjustedProgressPercent = useMemo(() => {
+    if (!job) return 0;
+    if (job.status === "completed") return 100;
+    if (job.status === "running" && allStepsCompleted && !job.final_report) {
+      return Math.min(progressPercent, 95);
+    }
+    return progressPercent;
+  }, [job, allStepsCompleted, progressPercent]);
+
+  const jobPhase = useMemo(() => {
+    if (!job) return "";
+    if (job.status === "completed") {
+      return "Report finalized";
+    }
+    if (job.status === "error") {
+      return "Job encountered an error";
+    }
+    if (!job.steps.length) {
+      return "Planning steps…";
+    }
+    const activeStep = job.steps.find((step) => !["completed", "partial"].includes(step.status));
+    if (activeStep) {
+      return `Running step ${activeStep.order ?? ""}`;
+    }
+    if (allStepsCompleted && !job.final_report) {
+      return "Synthesizing final report…";
+    }
+    return "";
+  }, [job, allStepsCompleted]);
 
   const canSubmitNewJob = !job || isTerminal(job.status) || job.status === "paused";
   const canPause = job ? job.status === "running" || job.status === "queued" : false;
@@ -664,8 +699,11 @@ export default function App() {
                   </strong>
                 </div>
               </div>
-              <div className="progress-bar">
-                <span style={{ width: `${progressPercent}%` }} />
+              <div className="progress-meta">
+                <div className="progress-bar">
+                  <span style={{ width: `${adjustedProgressPercent}%` }} />
+                </div>
+                {jobPhase ? <span className="progress-message">{jobPhase}</span> : null}
               </div>
               <div className="job-actions">
                 {canStart ? (
@@ -716,11 +754,11 @@ export default function App() {
               <h3>Step Timeline</h3>
               {job.steps.length ? (
                 <ul className="steps-list">
-                  {job.steps.map((step) => (
+                  {job.steps.map((step, index) => (
                     <li key={step.id}>
                       <div className="step-row">
                         <strong>
-                          Step {step.order + 1}: {step.title}
+                          Step {step.order ?? index + 1}: {step.title}
                         </strong>
                         <span className={`status-pill status-${step.status}`}>
                           {step.status}

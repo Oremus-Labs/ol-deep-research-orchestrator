@@ -1,5 +1,5 @@
-import { PutObjectCommand, S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { Client as MinioPresignClient } from "minio";
 import { config } from "../config";
 import { recordMinioUpload } from "../metrics";
 
@@ -40,10 +40,17 @@ export async function putObject(
   return `${protocol}://${endpointUrl.host}/${config.minio.bucket}/${key}`;
 }
 
+const presignClient = new MinioPresignClient({
+  endPoint: endpointUrl.hostname,
+  port: endpointUrl.port ? Number(endpointUrl.port) : endpointUrl.protocol === "https:" ? 443 : 80,
+  useSSL: endpointUrl.protocol === "https:",
+  accessKey: config.minio.accessKey,
+  secretKey: config.minio.secretKey,
+});
+
 export async function getSignedObjectUrl(key: string, expiresInSeconds?: number) {
   const expires = clampExpiry(expiresInSeconds ?? config.minio.signedUrlTTL);
-  const command = new GetObjectCommand({ Bucket: config.minio.bucket, Key: key });
-  return getSignedUrl(s3, command, { expiresIn: expires });
+  return presignClient.presignedGetObject(config.minio.bucket, key, expires);
 }
 
 export async function getSignedUrlForStoredObject(objectUrl: string) {

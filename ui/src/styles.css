@@ -107,6 +107,17 @@ button:disabled {
   background: linear-gradient(90deg, #06b6d4, #22d3ee);
 }
 
+.progress-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.progress-message {
+  font-size: 0.9rem;
+  color: #94a3b8;
+}
+
 .job-actions {
   display: flex;
   flex-wrap: wrap;
