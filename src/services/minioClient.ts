@@ -15,6 +15,8 @@ export const s3 = new S3Client({
   },
 });
 
+((s3.config as unknown) as Record<string, unknown>).requestChecksumMode = "DISABLED";
+
 export async function putObject(
   key: string,
   body: string | Uint8Array,
