@@ -9,7 +9,7 @@ export type JobStatus =
 export interface JobStep {
   id: string;
   title: string;
-  status: JobStatus | "pending";
+  status: JobStatus | "pending" | "partial";
   order: number;
   tool_hint?: string | null;
 }
