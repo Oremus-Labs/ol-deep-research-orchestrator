@@ -9,6 +9,9 @@ COPY migrations ./migrations
 RUN npm run build
 
 FROM node:20-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-fonts-recommended texlive-plain-generic ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/package*.json ./

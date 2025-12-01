@@ -1,6 +1,6 @@
 import { PoolClient, QueryResult } from "pg";
 import { pool } from "../db";
-import { JobStatus, ResearchJob } from "../types/job";
+import { JobStatus, ResearchJob, SourceRecord } from "../types/job";
 
 interface EnqueueInput {
   question: string;
@@ -173,6 +173,18 @@ export async function attachSource(
 export async function listNotes(jobId: string) {
   const { rows } = await pool.query(
     `SELECT * FROM notes WHERE job_id = $1 ORDER BY importance DESC, created_at`,
+    [jobId],
+  );
+  return rows;
+}
+
+export async function listSourcesByJob(jobId: string): Promise<SourceRecord[]> {
+  const { rows } = await pool.query<SourceRecord>(
+    `SELECT s.*
+     FROM sources s
+     INNER JOIN notes n ON n.id = s.note_id
+     WHERE n.job_id = $1
+     ORDER BY s.created_at`,
     [jobId],
   );
   return rows;

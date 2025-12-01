@@ -7,6 +7,7 @@ import {
   insertNote,
   insertStep,
   listNotes,
+  listSourcesByJob,
   updateJobStatus,
   updateStep,
 } from "../repositories/jobRepository";
@@ -19,6 +20,7 @@ import { ensureCollection, querySimilarNotes, upsertNoteVector } from "./qdrantC
 import { fetch } from "undici";
 import { clampForEmbedding, estimateTokens } from "../utils/text";
 import { jobDurationHistogram, jobStatusCounter, recordToolError, startToolTimer } from "../metrics";
+import { buildReportArtifacts } from "./reportBuilder";
 
 interface PlannedStep {
   title: string;
@@ -112,13 +114,22 @@ export class Worker {
 
     try {
       const { report: finalReport, critic } = await this.buildFinalReport(job);
-      await updateJobStatus(job.id, "completed", {
-        final_report: finalReport,
-        completed_at: new Date().toISOString(),
-      });
       if (critic) {
         await this.recordCriticFeedback(job, critic);
       }
+      const notes = await listNotes(job.id);
+      const sources = await listSourcesByJob(job.id);
+      const assets = await buildReportArtifacts({
+        job,
+        finalReport,
+        notes,
+        sources,
+      });
+      await updateJobStatus(job.id, "completed", {
+        final_report: finalReport,
+        report_assets: assets,
+        completed_at: new Date().toISOString(),
+      });
       await this.recordCrossSummary(job, finalReport);
       jobStatusCounter.labels("completed").inc();
       stopJobTimer({ status: "completed" });

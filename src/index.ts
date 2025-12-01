@@ -87,6 +87,7 @@ async function buildServer() {
       created_at: job.created_at,
       updated_at: job.updated_at,
       final_report: job.final_report,
+      assets: job.report_assets ?? null,
       steps: steps.map((step) => ({
         id: step.id,
         title: step.title,
