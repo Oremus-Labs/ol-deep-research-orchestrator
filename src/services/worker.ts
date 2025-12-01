@@ -12,6 +12,7 @@ import {
   insertCitationLedgerEntry,
   insertNote,
   insertStep,
+  listCitationLedger,
   listSteps,
   rescueStaleJobs,
   touchJobHeartbeat,
@@ -183,11 +184,13 @@ export class Worker {
       }
       const notes = await listNotes(job.id);
       const sources = await listSourcesByJob(job.id);
+      const citationLedger = await listCitationLedger(job.id);
       const assets = await buildReportArtifacts({
         job,
         finalReport,
         notes,
         sources,
+        citationLedger,
       });
       await touchJobHeartbeat(job.id);
       await updateJobStatus(job.id, "completed", {
@@ -532,21 +535,37 @@ export class Worker {
     const notes = await listNotes(job.id);
     const sources = await listSourcesByJob(job.id);
     const sourcesByNote = this.groupSourcesByNote(sources);
-    const renderedSections: string[] = [];
+    const renderedSections: { spec: SectionSpec; content: string }[] = [];
 
     for (const section of sections) {
       const content = await this.generateSectionDraft(job, section, notes, sourcesByNote);
       if (content) {
-        renderedSections.push(content);
+        renderedSections.push({ spec: section, content });
       }
       await touchJobHeartbeat(job.id);
     }
 
-    const combined = renderedSections.join("\n\n").trim();
+    const bridged = renderedSections.map((entry, idx) => {
+      if (idx === 0) {
+        return entry.content;
+      }
+      const bridge = this.buildSectionBridge(renderedSections[idx - 1].spec, entry.spec);
+      return `${bridge}\n\n${entry.content}`;
+    });
+
+    const combined = bridged.join("\n\n").trim();
     const notesText = this.buildNotesEvidence(notes);
-    const critic = await this.runCriticEvaluation(combined, notesText);
+    const sectionGuide = renderedSections
+      .map((entry, idx) => `${idx + 1}. ${entry.spec.title} (key: ${entry.spec.key})`)
+      .join("\n");
+    const critic = await this.runCriticEvaluation(combined, notesText, sectionGuide);
     const report = this.mergeCriticIntoDraft(combined, critic);
     return { report, critic };
+  }
+
+  private buildSectionBridge(prev: SectionSpec, next: SectionSpec) {
+    const focus = next.noteRoles.length ? next.noteRoles.join(", ") : "new findings";
+    return `> _Transition:_ ${next.title} builds on ${prev.title}, focusing on ${focus}.`;
   }
 
   private async generateSectionDraft(
@@ -613,7 +632,7 @@ export class Worker {
       const number = await this.ensureCitationNumber(jobId, source);
       citations.push(number);
     }
-    const suffix = citations.length ? ` ${citations.map((n) => `[${n}]`).join("")}` : "";
+    const suffix = citations.length ? ` ${citations.map((n) => `[${n}](#ref-${n})`).join("")}` : "";
     return { text: `${note.content}${suffix}`, citations };
   }
 
@@ -753,8 +772,8 @@ export class Worker {
     await touchJobHeartbeat(job.id);
   }
 
-  private async runCriticEvaluation(draft: string, notesText: string) {
-    const criticInput = `Draft report:\n${draft}\n\nNotes:\n${notesText}`;
+  private async runCriticEvaluation(draft: string, notesText: string, sectionGuide?: string) {
+    const criticInput = `Draft report:\n${draft}\n\nSections:\n${sectionGuide ?? "(not provided)"}\n\nNotes:\n${notesText}`;
     const criticRaw = await chatCompletion([
       { role: "system", content: prompts.critic },
       { role: "user", content: criticInput },

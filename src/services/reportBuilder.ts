@@ -4,7 +4,13 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { ResearchJob, NoteRecord, SourceRecord, ReportAssets } from "../types/job";
+import {
+  ResearchJob,
+  NoteRecord,
+  SourceRecord,
+  ReportAssets,
+  CitationLedgerRecord,
+} from "../types/job";
 import { putObject } from "./minioClient";
 import { logger } from "../logger";
 
@@ -15,10 +21,11 @@ interface BuildParams {
   finalReport: string;
   notes: NoteRecord[];
   sources: SourceRecord[];
+  citationLedger?: CitationLedgerRecord[];
 }
 
 export async function buildReportArtifacts(params: BuildParams): Promise<ReportAssets> {
-  const citations = buildCitationLedger(params.sources);
+  const citations = buildCitationEntries(params.citationLedger, params.sources);
   const markdown = renderMarkdown(params.job, params.finalReport, params.notes, citations);
   const tmpDir = path.join(os.tmpdir(), "deep-research-reports", params.job.id);
   await fs.mkdir(tmpDir, { recursive: true });
@@ -119,8 +126,9 @@ function renderMarkdown(
       citations
         .map((entry) => {
           const title = entry.title ?? entry.url ?? "Untitled Source";
-          const link = entry.url ? ` (${entry.url})` : "";
-          return `${entry.number}. ${title}${link}`;
+          const anchor = `ref-${entry.number}`;
+          const renderedLink = entry.url ? `[${title}](${entry.url})` : title;
+          return `<a id="${anchor}"></a>[${entry.number}] ${renderedLink}`;
         })
         .join("\n"),
     );
@@ -136,7 +144,24 @@ interface CitationEntry {
   url?: string | null;
 }
 
-function buildCitationLedger(sources: SourceRecord[]): CitationEntry[] {
+function buildCitationEntries(
+  ledger: CitationLedgerRecord[] | undefined,
+  sources: SourceRecord[],
+): CitationEntry[] {
+  if (ledger && ledger.length) {
+    return ledger
+      .map((entry) => ({
+        key: `${entry.job_id}:${entry.citation_number}`,
+        number: entry.citation_number,
+        title: entry.title ?? entry.url ?? null,
+        url: entry.url ?? null,
+      }))
+      .sort((a, b) => a.number - b.number);
+  }
+  return buildFallbackCitationLedger(sources);
+}
+
+function buildFallbackCitationLedger(sources: SourceRecord[]): CitationEntry[] {
   const ledger = new Map<string, CitationEntry>();
   let counter = 1;
   for (const source of sources) {
