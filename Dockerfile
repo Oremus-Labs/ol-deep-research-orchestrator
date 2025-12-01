@@ -10,8 +10,14 @@ RUN npm run build
 
 FROM node:20-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-fonts-recommended texlive-plain-generic ca-certificates \
+    && apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-fonts-recommended texlive-plain-generic ca-certificates unzip wget \
     && rm -rf /var/lib/apt/lists/*
+RUN wget -qO /tmp/lmodern.zip https://mirrors.ctan.org/fonts/lm.zip \
+    && unzip -q /tmp/lmodern.zip -d /tmp/lmodern \
+    && mkdir -p /usr/share/texlive/texmf-dist/tex/latex \
+    && cp -r /tmp/lmodern/lm/tex/latex/lm /usr/share/texlive/texmf-dist/tex/latex/ \
+    && mktexlsr \
+    && rm -rf /tmp/lmodern /tmp/lmodern.zip
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/package*.json ./
