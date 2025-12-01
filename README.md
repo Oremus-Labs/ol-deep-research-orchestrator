@@ -31,3 +31,29 @@ The production container serves the UI at `/ui/` and exposes proxy endpoints und
 - `POST /ui-api/research`, `GET /ui-api/research` & `GET /ui-api/research/:id` – server-side proxies consumed by the Deep Research UI (no `X-API-Key` required).
 
 All orchestrator endpoints (except `/healthz`, `/metrics`, `/ui`, and `/ui-api/*`) require an `X-API-Key` header matching `ORCH_API_KEY`. The `/ui-api` routes proxy authenticated calls on behalf of the browser UI.
+
+## Inspecting Completed Jobs
+
+When someone runs a Deep Research job, just share the **job ID** (for example `43c77160-3beb-4b78-8979-236cd5b8d3c2`). With that ID you can inspect the run in two ways:
+
+1. **API / CLI**
+
+   ```bash
+   # Summary list (no key required through the UI proxy)
+   curl -s https://deep-research-ui.oremuslabs.app/ui-api/research | jq
+
+   # Detailed payload for a specific job (steps, notes, report assets)
+   curl -s https://deep-research-ui.oremuslabs.app/ui-api/research/<job_id> | jq
+
+   # Direct orchestrator API (requires ORCH_API_KEY)
+   curl -s -H "x-api-key: $ORCH_API_KEY" https://deep-research.oremuslabs.app/research/<job_id> | jq
+   ```
+
+   The response includes the `final_report` text and the `assets` block with Markdown/PDF/DOCX URLs so you can download the rendered reports or cross-check citations.
+
+2. **Browser UI**
+   - Open `https://deep-research-ui.oremuslabs.app/ui/`.
+   - The “Recent Jobs” panel lists the latest runs (even if the current session didn’t start them). Click any job to load its status, logs, and report preview.
+   - Use the download buttons to fetch Markdown/PDF/DOCX artifacts for offline review.
+
+Sharing the job ID is therefore enough context for future debugging or report inspection.
