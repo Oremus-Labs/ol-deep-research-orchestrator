@@ -11,7 +11,7 @@ import {
   ReportAssets,
   CitationLedgerRecord,
 } from "../types/job";
-import { putObject } from "./minioClient";
+import { putObject, getSignedUrlForStoredObject } from "./minioClient";
 import { logger } from "../logger";
 
 const execFileAsync = promisify(execFile);
@@ -45,21 +45,27 @@ export async function buildReportArtifacts(params: BuildParams): Promise<ReportA
     fs.readFile(docxPath),
   ]);
 
-  const markdownUrl = await putObject(
+  const markdownRawUrl = await putObject(
     `reports/${params.job.id}/report.md`,
     mdBuffer,
     "text/markdown; charset=utf-8",
   );
-  const pdfUrl = await putObject(
+  const pdfRawUrl = await putObject(
     `reports/${params.job.id}/report.pdf`,
     pdfBuffer,
     "application/pdf",
   );
-  const docxUrl = await putObject(
+  const docxRawUrl = await putObject(
     `reports/${params.job.id}/report.docx`,
     docxBuffer,
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   );
+
+  const [markdownUrl, pdfUrl, docxUrl] = await Promise.all([
+    getSignedUrlForStoredObject(markdownRawUrl),
+    getSignedUrlForStoredObject(pdfRawUrl),
+    getSignedUrlForStoredObject(docxRawUrl),
+  ]);
 
   await fs.rm(tmpDir, { recursive: true, force: true });
 

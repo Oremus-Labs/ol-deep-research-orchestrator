@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { NoteRecord, ResearchJob, ResearchStep, SourceRecord } from "../types/job";
+import {
+  CitationLedgerRecord,
+  NoteRecord,
+  ResearchJob,
+  ResearchStep,
+  SourceRecord,
+} from "../types/job";
 import { config } from "../config";
 import { logger } from "../logger";
 import {
@@ -191,16 +197,17 @@ export class Worker {
         logger.info({ jobId: job.id }, "Longform pipeline enabled");
       }
       await this.ensureJobActive(job.id);
-      const { report: finalReport, critic } = config.features.longformEnabled
+      const { report: baseReport, critic } = config.features.longformEnabled
         ? await this.buildLongformReport(job)
         : await this.buildFinalReport(job);
+      const notes = await listNotes(job.id);
+      const sources = await listSourcesByJob(job.id);
+      const citationLedger = await listCitationLedger(job.id);
+      const finalReport = appendReferencesToReport(baseReport, citationLedger);
       await touchJobHeartbeat(job.id);
       if (critic) {
         await this.recordCriticFeedback(job, critic);
       }
-      const notes = await listNotes(job.id);
-      const sources = await listSourcesByJob(job.id);
-      const citationLedger = await listCitationLedger(job.id);
       const assets = await buildReportArtifacts({
         job,
         finalReport,
@@ -214,7 +221,7 @@ export class Worker {
         report_assets: assets,
         completed_at: new Date().toISOString(),
       });
-      await this.recordCrossSummary(job, finalReport);
+      await this.recordCrossSummary(job, baseReport);
       jobStatusCounter.labels("completed").inc();
       stopJobTimer({ status: "completed" });
       logger.info({ jobId: job.id }, "Job completed");
@@ -857,4 +864,20 @@ export class Worker {
 function clampImportance(value?: number) {
   const num = Number.isFinite(value) ? Number(value) : 3;
   return Math.min(5, Math.max(1, Math.round(num)));
+}
+
+function appendReferencesToReport(report: string, ledger: CitationLedgerRecord[]) {
+  if (!ledger.length) {
+    return report;
+  }
+  const lines = ledger
+    .map((entry) => {
+      const title = entry.title ?? entry.url ?? "Untitled Source";
+      const anchor = `ref-${entry.citation_number}`;
+      const renderedLink = entry.url ? `[${title}](${entry.url})` : title;
+      return `<a id="${anchor}"></a>[${entry.citation_number}] ${renderedLink}`;
+    })
+    .join("\n");
+  const separator = report.trim().endsWith("\n") ? "" : "\n";
+  return `${report.trim()}${separator}\n\n## References\n${lines}`;
 }
