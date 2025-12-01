@@ -27,6 +27,8 @@ export interface ResearchStep {
   status: JobStatus | "pending" | "partial";
   step_order: number;
   result?: Record<string, unknown> | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface NoteRecord {

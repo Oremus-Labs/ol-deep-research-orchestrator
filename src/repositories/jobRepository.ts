@@ -4,6 +4,7 @@ import {
   CitationLedgerRecord,
   JobStatus,
   ResearchJob,
+  ResearchStep,
   SectionDraftRecord,
   SourceRecord,
 } from "../types/job";
@@ -42,8 +43,8 @@ export async function getJob(jobId: string): Promise<ResearchJob | null> {
   return rows[0] ?? null;
 }
 
-export async function listSteps(jobId: string) {
-  const { rows } = await pool.query(
+export async function listSteps(jobId: string): Promise<ResearchStep[]> {
+  const { rows } = await pool.query<ResearchStep>(
     "SELECT * FROM research_steps WHERE job_id = $1 ORDER BY step_order",
     [jobId],
   );

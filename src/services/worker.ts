@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { NoteRecord, ResearchJob, SourceRecord } from "../types/job";
+import { NoteRecord, ResearchJob, ResearchStep, SourceRecord } from "../types/job";
 import { config } from "../config";
 import { logger } from "../logger";
 import {
@@ -12,6 +12,7 @@ import {
   insertCitationLedgerEntry,
   insertNote,
   insertStep,
+  listSteps,
   rescueStaleJobs,
   touchJobHeartbeat,
   listNotes,
@@ -136,22 +137,34 @@ export class Worker {
   private async processJob(job: ResearchJob) {
     const stopJobTimer = jobDurationHistogram.startTimer();
     jobStatusCounter.labels("started").inc();
-    const stepsPlan = await this.planSteps(job);
-    if (!stepsPlan.length) {
-      jobStatusCounter.labels("error").inc();
-      stopJobTimer({ status: "error" });
-      throw new Error("No steps planned");
+    const existingSteps = await listSteps(job.id);
+    let steps: { plan: PlannedStep; record: ResearchStep }[] = [];
+
+    if (!existingSteps.length) {
+      const stepsPlan = await this.planSteps(job);
+      if (!stepsPlan.length) {
+        jobStatusCounter.labels("error").inc();
+        stopJobTimer({ status: "error" });
+        throw new Error("No steps planned");
+      }
+      for (let i = 0; i < stepsPlan.length; i += 1) {
+        const plan = stepsPlan[i];
+        const inserted = await insertStep(job.id, plan.title, i + 1, plan.tool_hint);
+        steps.push({ plan, record: inserted });
+      }
+    } else {
+      logger.info({ jobId: job.id }, "Resuming job with existing steps");
+      steps = existingSteps.map((record) => ({
+        plan: { title: record.title, tool_hint: record.tool_hint ?? undefined },
+        record,
+      }));
     }
     await touchJobHeartbeat(job.id);
 
-    const steps = [];
-    for (let i = 0; i < stepsPlan.length; i += 1) {
-      const plan = stepsPlan[i];
-      const inserted = await insertStep(job.id, plan.title, i + 1, plan.tool_hint);
-      steps.push({ plan, record: inserted });
-    }
-
     for (const step of steps) {
+      if (this.isStepComplete(step.record.status)) {
+        continue;
+      }
       await this.executeStep(job, step.plan, step.record.id, step.record.step_order);
       await touchJobHeartbeat(job.id);
     }
@@ -190,6 +203,10 @@ export class Worker {
       throw error;
     }
     logger.info({ jobId: job.id }, "Job completed");
+  }
+
+  private isStepComplete(status?: string | null) {
+    return status === "completed" || status === "partial";
   }
 
   private async planSteps(job: ResearchJob): Promise<PlannedStep[]> {
