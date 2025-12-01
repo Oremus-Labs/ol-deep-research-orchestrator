@@ -49,8 +49,14 @@ async function buildServer() {
       prefix: "/ui/",
       list: false,
     });
+    app.get("/", async (_request, reply) => reply.redirect("/ui/"));
     app.get("/ui", async (_request, reply) => reply.sendFile("index.html"));
-    app.get("/ui/*", async (_request, reply) => reply.sendFile("index.html"));
+    app.setNotFoundHandler((request, reply) => {
+      if (request.url.startsWith("/ui/") || request.url === "/ui") {
+        return reply.sendFile("index.html");
+      }
+      reply.status(404).send({ error: "Not Found" });
+    });
   } else {
     app.log.warn({ uiDistPath }, "UI build directory not found. Skipping static assets.");
   }
