@@ -123,7 +123,7 @@ async function proxyRequest(
     method,
     headers: {
       "x-api-key": apiKey,
-      ...(method === "POST" ? { "content-type": "application/json" } : {}),
+      ...(method === "POST" && body ? { "content-type": "application/json" } : {}),
     },
     body,
   });
