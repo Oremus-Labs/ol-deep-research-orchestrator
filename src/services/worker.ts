@@ -7,6 +7,7 @@ import {
   claimNextQueuedJob,
   createSectionDraft,
   findCitationByHash,
+  getJob,
   getNextCitationNumber,
   getSectionDraft,
   insertCitationLedgerEntry,
@@ -70,6 +71,16 @@ interface SectionSpec {
   title: string;
   noteRoles: string[];
   maxNotes: number;
+}
+
+class JobControlError extends Error {
+  readonly status: "paused" | "cancelled";
+
+  constructor(status: "paused" | "cancelled") {
+    super(`Job ${status}`);
+    this.status = status;
+    this.name = "JobControlError";
+  }
 }
 
 const DEFAULT_SECTION_PLAN: SectionSpec[] = [
@@ -142,6 +153,8 @@ export class Worker {
     logger.info({ jobId: job.id, existingSteps: existingSteps.length }, "Loaded existing steps for job");
     let steps: { plan: PlannedStep; record: ResearchStep }[] = [];
 
+    await this.ensureJobActive(job.id);
+
     if (!existingSteps.length) {
       const stepsPlan = await this.planSteps(job);
       if (!stepsPlan.length) {
@@ -164,17 +177,20 @@ export class Worker {
     await touchJobHeartbeat(job.id);
 
     for (const step of steps) {
+      await this.ensureJobActive(job.id);
       if (this.isStepComplete(step.record.status)) {
         continue;
       }
       await this.executeStep(job, step.plan, step.record.id, step.record.step_order);
       await touchJobHeartbeat(job.id);
+      await this.ensureJobActive(job.id);
     }
 
     try {
       if (config.features.longformEnabled) {
         logger.info({ jobId: job.id }, "Longform pipeline enabled");
       }
+      await this.ensureJobActive(job.id);
       const { report: finalReport, critic } = config.features.longformEnabled
         ? await this.buildLongformReport(job)
         : await this.buildFinalReport(job);
@@ -201,12 +217,19 @@ export class Worker {
       await this.recordCrossSummary(job, finalReport);
       jobStatusCounter.labels("completed").inc();
       stopJobTimer({ status: "completed" });
+      logger.info({ jobId: job.id }, "Job completed");
+      return;
     } catch (error) {
+      if (error instanceof JobControlError) {
+        jobStatusCounter.labels(error.status).inc();
+        stopJobTimer({ status: error.status });
+        logger.info({ jobId: job.id, status: error.status }, "Job halted by user action");
+        return;
+      }
       jobStatusCounter.labels("error").inc();
       stopJobTimer({ status: "error" });
       throw error;
     }
-    logger.info({ jobId: job.id }, "Job completed");
   }
 
   private isStepComplete(status?: string | null) {
@@ -270,6 +293,7 @@ export class Worker {
     stepId: string,
     stepOrder: number,
   ) {
+    await this.ensureJobActive(job.id);
     await updateStep(stepId, "running");
     await touchJobHeartbeat(job.id);
     const query = `${job.question} :: ${plan.objective ?? "research"}`;
@@ -531,6 +555,7 @@ export class Worker {
     report: string;
     critic?: CriticFeedback;
   }> {
+    await this.ensureJobActive(job.id);
     const sections = this.getSectionPlan(job);
     const notes = await listNotes(job.id);
     const sources = await listSourcesByJob(job.id);
@@ -538,6 +563,7 @@ export class Worker {
     const renderedSections: { spec: SectionSpec; content: string }[] = [];
 
     for (const section of sections) {
+      await this.ensureJobActive(job.id);
       const content = await this.generateSectionDraft(job, section, notes, sourcesByNote);
       if (content) {
         renderedSections.push({ spec: section, content });
@@ -811,6 +837,19 @@ export class Worker {
       });
     } catch (error) {
       logger.error({ error }, "Embedding/Qdrant failed for note");
+    }
+  }
+
+  private async ensureJobActive(jobId: string) {
+    const snapshot = await getJob(jobId);
+    if (!snapshot) {
+      throw new Error("Job record missing during execution");
+    }
+    if (snapshot.status === "paused") {
+      throw new JobControlError("paused");
+    }
+    if (snapshot.status === "cancelled") {
+      throw new JobControlError("cancelled");
     }
   }
 }

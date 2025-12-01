@@ -102,6 +102,10 @@ export async function updateJobStatus(
   await pool.query(sql, values);
 }
 
+export async function deleteJob(jobId: string) {
+  await pool.query("DELETE FROM research_jobs WHERE id = $1", [jobId]);
+}
+
 export async function insertStep(
   jobId: string,
   title: string,

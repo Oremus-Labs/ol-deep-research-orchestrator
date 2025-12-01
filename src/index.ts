@@ -8,6 +8,7 @@ import { config } from "./config";
 import { logger } from "./logger";
 import { runMigrations } from "./migrate";
 import {
+  deleteJob,
   enqueueJob,
   getJob,
   listNotes,
@@ -16,6 +17,7 @@ import {
   updateJobStatus,
 } from "./repositories/jobRepository";
 import { Worker } from "./services/worker";
+import { JobStatus } from "./types/job";
 import { metricsRegistry } from "./metrics";
 
 const worker = new Worker();
@@ -123,15 +125,22 @@ async function buildServer() {
 
   app.post("/research/:id/cancel", async (request) => {
     const params = idParamSchema.parse(request.params);
-    const job = await getJob(params.id);
-    if (!job) {
-      throw app.httpErrors.notFound("job not found");
-    }
-    if (job.status === "completed" || job.status === "cancelled") {
-      return { job_id: job.id, status: job.status };
-    }
-    await updateJobStatus(job.id, "cancelled");
-    return { job_id: job.id, status: "cancelled" };
+    return cancelJobById(app, params.id);
+  });
+
+  app.post("/research/:id/pause", async (request) => {
+    const params = idParamSchema.parse(request.params);
+    return pauseJobById(app, params.id);
+  });
+
+  app.post("/research/:id/start", async (request) => {
+    const params = idParamSchema.parse(request.params);
+    return startJobById(app, params.id);
+  });
+
+  app.delete("/research/:id", async (request) => {
+    const params = idParamSchema.parse(request.params);
+    return deleteJobById(app, params.id);
   });
 
   app.post("/ui-api/research", async (request, reply) => {
@@ -163,6 +172,26 @@ async function buildServer() {
   app.get("/ui-api/research/:id", async (request) => {
     const params = idParamSchema.parse(request.params);
     return buildJobResponse(app, params.id);
+  });
+
+  app.post("/ui-api/research/:id/cancel", async (request) => {
+    const params = idParamSchema.parse(request.params);
+    return cancelJobById(app, params.id);
+  });
+
+  app.post("/ui-api/research/:id/pause", async (request) => {
+    const params = idParamSchema.parse(request.params);
+    return pauseJobById(app, params.id);
+  });
+
+  app.post("/ui-api/research/:id/start", async (request) => {
+    const params = idParamSchema.parse(request.params);
+    return startJobById(app, params.id);
+  });
+
+  app.delete("/ui-api/research/:id", async (request) => {
+    const params = idParamSchema.parse(request.params);
+    return deleteJobById(app, params.id);
   });
 
   worker.start();
@@ -228,6 +257,64 @@ async function buildJobResponse(app: FastifyInstance, jobId: string) {
     })),
     error: job.error ?? null,
   };
+}
+
+type JobMutationResult = { job_id: string; status: JobStatus };
+type JobDeleteResult = { job_id: string; deleted: true };
+
+async function fetchJobOrThrow(app: FastifyInstance, jobId: string) {
+  const job = await getJob(jobId);
+  if (!job) {
+    throw app.httpErrors.notFound("job not found");
+  }
+  return job;
+}
+
+async function cancelJobById(app: FastifyInstance, jobId: string): Promise<JobMutationResult> {
+  const job = await fetchJobOrThrow(app, jobId);
+  if (job.status === "cancelled") {
+    return { job_id: job.id, status: "cancelled" };
+  }
+  if (job.status === "completed") {
+    throw app.httpErrors.badRequest("Job already completed");
+  }
+  await updateJobStatus(job.id, "cancelled");
+  return { job_id: job.id, status: "cancelled" };
+}
+
+async function pauseJobById(app: FastifyInstance, jobId: string): Promise<JobMutationResult> {
+  const job = await fetchJobOrThrow(app, jobId);
+  if (job.status === "paused") {
+    return { job_id: job.id, status: "paused" };
+  }
+  if (job.status === "running" || job.status === "queued") {
+    await updateJobStatus(job.id, "paused");
+    return { job_id: job.id, status: "paused" };
+  }
+  throw app.httpErrors.badRequest(`Cannot pause job in status ${job.status}`);
+}
+
+async function startJobById(app: FastifyInstance, jobId: string): Promise<JobMutationResult> {
+  const job = await fetchJobOrThrow(app, jobId);
+  if (job.status !== "paused") {
+    throw app.httpErrors.badRequest(`Cannot start job in status ${job.status}`);
+  }
+  await updateJobStatus(job.id, "queued", {
+    error: null,
+    final_report: null,
+    report_assets: null,
+    completed_at: null,
+  });
+  return { job_id: job.id, status: "queued" };
+}
+
+async function deleteJobById(app: FastifyInstance, jobId: string): Promise<JobDeleteResult> {
+  const job = await fetchJobOrThrow(app, jobId);
+  if (job.status === "running") {
+    throw app.httpErrors.badRequest("Pause or cancel the job before deleting it");
+  }
+  await deleteJob(job.id);
+  return { job_id: job.id, deleted: true };
 }
 
 buildServer()

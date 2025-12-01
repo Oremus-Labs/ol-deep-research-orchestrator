@@ -91,6 +91,7 @@ button:disabled {
 .status-badge.status-completed { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 .status-badge.status-error { background: rgba(248, 113, 113, 0.2); color: #f87171; }
 .status-badge.status-cancelled { background: rgba(148, 163, 184, 0.2); color: #94a3b8; }
+.status-badge.status-paused { background: rgba(75, 85, 99, 0.3); color: #cbd5f5; }
 
 .progress-bar {
   width: 100%;
@@ -104,6 +105,17 @@ button:disabled {
   display: block;
   height: 100%;
   background: linear-gradient(90deg, #06b6d4, #22d3ee);
+}
+
+.job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.job-action-error {
+  margin-top: 0.5rem;
 }
 
 .steps-list {
@@ -223,6 +235,22 @@ button:disabled {
 .ghost-btn-sm {
   padding: 0.35rem 0.65rem;
   font-size: 0.8rem;
+}
+
+.danger-btn {
+  padding: 0.45rem 0.85rem;
+  border-radius: 0.5rem;
+  border: 1px solid #7f1d1d;
+  background: rgba(239, 68, 68, 0.15);
+  color: #fecaca;
+  font-weight: 500;
+}
+
+.danger-btn:disabled,
+.ghost-btn:disabled,
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .secondary-text {
@@ -359,6 +387,7 @@ button:disabled {
 .status-pill.status-cancelled { background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: none; }
 .status-pill.status-partial { background: rgba(14, 165, 233, 0.2); color: #0ea5e9; border: none; }
 .status-pill.status-pending { background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: none; }
+.status-pill.status-paused { background: rgba(75, 85, 99, 0.3); color: #cbd5f5; border: none; }
 
 .error-text {
   color: #f87171;

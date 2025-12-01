@@ -1,4 +1,10 @@
-export type JobStatus = "queued" | "running" | "completed" | "error" | "cancelled";
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "error"
+  | "cancelled"
+  | "paused";
 
 export interface JobStep {
   id: string;

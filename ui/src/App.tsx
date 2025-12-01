@@ -17,6 +17,8 @@ type LogEntry = {
   message: string;
 };
 
+type JobAction = "pause" | "start" | "cancel" | "delete";
+
 const POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "error", "cancelled"];
 const STATUS_LABEL: Record<JobStatus, string> = {
@@ -25,6 +27,7 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   completed: "Completed",
   error: "Error",
   cancelled: "Cancelled",
+  paused: "Paused",
 };
 
 interface FormState {
@@ -192,6 +195,8 @@ export default function App() {
   const [jobList, setJobList] = useState<JobListItem[]>([]);
   const [isLoadingJobs, setIsLoadingJobs] = useState(false);
   const [jobListError, setJobListError] = useState<string | null>(null);
+  const [jobActionError, setJobActionError] = useState<string | null>(null);
+  const [actionInFlight, setActionInFlight] = useState<JobAction | null>(null);
   const prevStepStatuses = useRef(new Map<string, string>());
   const prevJobStatus = useRef<JobStatus | null>(null);
   const activeJobId = job?.job_id ?? jobId;
@@ -303,6 +308,8 @@ export default function App() {
           message: `Job ${result.job_id} queued`,
         },
       ]);
+      setJobActionError(null);
+      setActionInFlight(null);
       void refreshJobList();
     } catch (error) {
       setUiError(error instanceof Error ? error.message : "Failed to submit job");
@@ -319,11 +326,15 @@ export default function App() {
     setFormState(createDefaultFormState());
     prevStepStatuses.current.clear();
     prevJobStatus.current = null;
+    setJobActionError(null);
+    setActionInFlight(null);
   };
 
   const handleSelectExistingJob = (selectedId: string) => {
     if (!selectedId) return;
     setUiError(null);
+    setJobActionError(null);
+    setActionInFlight(null);
     setJobId(selectedId);
     if (job?.job_id !== selectedId) {
       setJob(null);
@@ -336,6 +347,48 @@ export default function App() {
   const handleManualJobRefresh = () => {
     void refreshJobList({ showSpinner: true });
   };
+
+  const handleJobAction = useCallback(
+    async (action: JobAction) => {
+      if (!job) return;
+      if (action === "delete") {
+        const confirmed = window.confirm("Delete this job and all related artifacts?");
+        if (!confirmed) {
+          return;
+        }
+      }
+      setJobActionError(null);
+      setActionInFlight(action);
+      try {
+        const endpoint =
+          action === "delete"
+            ? `/ui-api/research/${job.job_id}`
+            : `/ui-api/research/${job.job_id}/${action}`;
+        const method = action === "delete" ? "DELETE" : "POST";
+        const response = await fetch(endpoint, { method });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `Action ${action} failed`);
+        }
+        if (action === "delete") {
+          resetJobView();
+          await refreshJobList({ showSpinner: true });
+          return;
+        }
+        const detail = await fetch(`/ui-api/research/${job.job_id}`);
+        if (detail.ok) {
+          const payload = (await detail.json()) as JobResponse;
+          setJob(payload);
+        }
+        await refreshJobList();
+      } catch (error) {
+        setJobActionError(error instanceof Error ? error.message : "Job action failed");
+      } finally {
+        setActionInFlight(null);
+      }
+    },
+    [job, refreshJobList],
+  );
 
   useEffect(() => {
     void refreshJobList();
@@ -448,7 +501,11 @@ export default function App() {
     );
   }, [job]);
 
-  const canSubmitNewJob = !job || isTerminal(job.status);
+  const canSubmitNewJob = !job || isTerminal(job.status) || job.status === "paused";
+  const canPause = job ? job.status === "running" || job.status === "queued" : false;
+  const canStart = job?.status === "paused";
+  const canCancel = job ? ["running", "queued", "paused"].includes(job.status) : false;
+  const canDelete = job ? job.status !== "running" : false;
 
   return (
     <div className="app-shell">
@@ -610,6 +667,49 @@ export default function App() {
               <div className="progress-bar">
                 <span style={{ width: `${progressPercent}%` }} />
               </div>
+              <div className="job-actions">
+                {canStart ? (
+                  <button
+                    type="button"
+                    className="ghost-btn ghost-btn-sm"
+                    onClick={() => handleJobAction("start")}
+                    disabled={actionInFlight !== null}
+                  >
+                    {actionInFlight === "start" ? "Starting…" : "Start / Resume"}
+                  </button>
+                ) : null}
+                {canPause ? (
+                  <button
+                    type="button"
+                    className="ghost-btn ghost-btn-sm"
+                    onClick={() => handleJobAction("pause")}
+                    disabled={actionInFlight !== null}
+                  >
+                    {actionInFlight === "pause" ? "Pausing…" : "Pause"}
+                  </button>
+                ) : null}
+                {canCancel ? (
+                  <button
+                    type="button"
+                    className="danger-btn"
+                    onClick={() => handleJobAction("cancel")}
+                    disabled={actionInFlight !== null}
+                  >
+                    {actionInFlight === "cancel" ? "Cancelling…" : "Cancel"}
+                  </button>
+                ) : null}
+                {canDelete ? (
+                  <button
+                    type="button"
+                    className="danger-btn"
+                    onClick={() => handleJobAction("delete")}
+                    disabled={actionInFlight !== null}
+                  >
+                    {actionInFlight === "delete" ? "Deleting…" : "Delete"}
+                  </button>
+                ) : null}
+              </div>
+              {jobActionError ? <p className="error-text job-action-error">{jobActionError}</p> : null}
               {job.error ? <p className="error-text">Job error: {job.error}</p> : null}
             </div>
             <div className="card">

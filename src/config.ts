@@ -31,6 +31,7 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value?.toLowerCase() === "true")
     .default("false" as unknown as boolean),
+  MINIO_SIGNED_URL_TTL_SECONDS: z.coerce.number().optional().default(604800),
   MAX_CONCURRENT_JOBS: z.coerce.number().optional().default(1),
   MAX_STEPS: z.coerce.number().optional().default(8),
   MAX_JOB_SECONDS: z.coerce.number().optional().default(3600),
@@ -96,6 +97,7 @@ export const config = {
     secretKey: env.MINIO_SECRET_KEY,
     bucket: env.MINIO_BUCKET,
     useSSL: Boolean(env.MINIO_USE_SSL),
+    signedUrlTTL: env.MINIO_SIGNED_URL_TTL_SECONDS,
   },
   worker: {
     maxConcurrent: env.MAX_CONCURRENT_JOBS,
