@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { CreateJobPayload, JobResponse, JobStatus } from "./types";
+import type {
+  CreateJobPayload,
+  JobListItem,
+  JobListResponse,
+  JobResponse,
+  JobStatus,
+} from "./types";
 
 type DepthOption = "quick" | "normal" | "deep";
 
@@ -57,6 +63,11 @@ const formatDuration = (start?: string | null, end?: string | null) => {
 };
 
 const isTerminal = (status: JobStatus) => TERMINAL_STATUSES.includes(status);
+
+const truncateText = (value: string, maxLength = 90) => {
+  if (!value) return "";
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+};
 
 function StatusBadge({ status }: { status: JobStatus }) {
   return (
@@ -178,8 +189,12 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [jobList, setJobList] = useState<JobListItem[]>([]);
+  const [isLoadingJobs, setIsLoadingJobs] = useState(false);
+  const [jobListError, setJobListError] = useState<string | null>(null);
   const prevStepStatuses = useRef(new Map<string, string>());
   const prevJobStatus = useRef<JobStatus | null>(null);
+  const activeJobId = job?.job_id ?? jobId;
 
   const handleInputChange = (
     event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
@@ -201,6 +216,28 @@ export default function App() {
       };
     });
   };
+
+  const refreshJobList = useCallback(async (options?: { showSpinner?: boolean }) => {
+    if (options?.showSpinner) {
+      setIsLoadingJobs(true);
+    }
+    try {
+      const response = await fetch("/ui-api/research?limit=25");
+      if (!response.ok) {
+        throw new Error(`Job list status ${response.status}`);
+      }
+      const payload = (await response.json()) as JobListResponse;
+      setJobList(payload.jobs ?? []);
+      setJobListError(null);
+    } catch (error) {
+      setJobListError("Failed to load job history");
+      console.error(error);
+    } finally {
+      if (options?.showSpinner) {
+        setIsLoadingJobs(false);
+      }
+    }
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -266,6 +303,7 @@ export default function App() {
           message: `Job ${result.job_id} queued`,
         },
       ]);
+      void refreshJobList();
     } catch (error) {
       setUiError(error instanceof Error ? error.message : "Failed to submit job");
     } finally {
@@ -282,6 +320,32 @@ export default function App() {
     prevStepStatuses.current.clear();
     prevJobStatus.current = null;
   };
+
+  const handleSelectExistingJob = (selectedId: string) => {
+    if (!selectedId) return;
+    setUiError(null);
+    setJobId(selectedId);
+    if (job?.job_id !== selectedId) {
+      setJob(null);
+      setLogs([]);
+      prevStepStatuses.current.clear();
+      prevJobStatus.current = null;
+    }
+  };
+
+  const handleManualJobRefresh = () => {
+    void refreshJobList({ showSpinner: true });
+  };
+
+  useEffect(() => {
+    void refreshJobList();
+    const interval = window.setInterval(() => {
+      void refreshJobList();
+    }, 15000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [refreshJobList]);
 
   useEffect(() => {
     if (!jobId) return undefined;
@@ -465,13 +529,50 @@ export default function App() {
             <button className="primary-btn" type="submit" disabled={isSubmitting || !canSubmitNewJob}>
               {isSubmitting ? "Submitting…" : "Submit Job"}
             </button>
-            {job ? (
-              <button type="button" className="ghost-btn" onClick={resetJobView}>
-                Reset
+        {job ? (
+          <button type="button" className="ghost-btn" onClick={resetJobView}>
+            Reset
+          </button>
+        ) : null}
+      </div>
+    </form>
+        <section className="section">
+          <div className="card job-list-card">
+            <div className="card-header">
+              <h3>Recent Jobs</h3>
+              <button
+                type="button"
+                className="ghost-btn ghost-btn-sm"
+                onClick={handleManualJobRefresh}
+                disabled={isLoadingJobs}
+              >
+                {isLoadingJobs ? "Refreshing…" : "Refresh"}
               </button>
-            ) : null}
+            </div>
+            {jobListError ? <p className="error-text">{jobListError}</p> : null}
+            {jobList.length ? (
+              <ul className="job-list">
+                {jobList.map((item) => (
+                  <li key={item.job_id}>
+                    <button
+                      type="button"
+                      className={`job-list-item ${activeJobId === item.job_id ? "active" : ""}`}
+                      onClick={() => handleSelectExistingJob(item.job_id)}
+                    >
+                      <div className="job-list-title">{truncateText(item.question)}</div>
+                      <div className="job-list-meta">
+                        <span className={`status-pill status-${item.status}`}>{item.status}</span>
+                        <span>{formatDateTime(item.updated_at ?? item.created_at)}</span>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="secondary-text">No jobs yet. Submit a question to get started.</p>
+            )}
           </div>
-        </form>
+        </section>
         <section className="section">
           <h3>Job Logs</h3>
           <LogPanel logs={logs} />

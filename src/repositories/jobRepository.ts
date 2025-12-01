@@ -178,6 +178,17 @@ export async function listNotes(jobId: string) {
   return rows;
 }
 
+export async function listRecentJobs(limit: number) {
+  const { rows } = await pool.query<ResearchJob>(
+    `SELECT id, question, status, created_at, updated_at, final_report
+     FROM research_jobs
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return rows;
+}
+
 export async function listSourcesByJob(jobId: string): Promise<SourceRecord[]> {
   const { rows } = await pool.query<SourceRecord>(
     `SELECT s.*

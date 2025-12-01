@@ -40,6 +40,19 @@ export interface JobResponse {
   error?: string | null;
 }
 
+export interface JobListItem {
+  job_id: string;
+  status: JobStatus;
+  question: string;
+  created_at?: string;
+  updated_at?: string;
+  has_report?: boolean;
+}
+
+export interface JobListResponse {
+  jobs: JobListItem[];
+}
+
 export interface CreateJobPayload {
   question: string;
   options?: {

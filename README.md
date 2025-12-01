@@ -25,8 +25,9 @@ The production container serves the UI at `/ui/` and exposes proxy endpoints und
 
 - `POST /research` – enqueue a job.
 - `GET /research/:id` – check status & report.
+- `GET /research` – list recent jobs (used by the UI dashboard).
 - `POST /research/:id/cancel` – cancel queued/running job.
 - `GET /healthz` – readiness probe.
-- `POST /ui-api/research` & `GET /ui-api/research/:id` – server-side proxies consumed by the Deep Research UI (no `X-API-Key` required).
+- `POST /ui-api/research`, `GET /ui-api/research` & `GET /ui-api/research/:id` – server-side proxies consumed by the Deep Research UI (no `X-API-Key` required).
 
 All orchestrator endpoints (except `/healthz`, `/metrics`, `/ui`, and `/ui-api/*`) require an `X-API-Key` header matching `ORCH_API_KEY`. The `/ui-api` routes proxy authenticated calls on behalf of the browser UI.

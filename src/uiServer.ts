@@ -65,6 +65,15 @@ async function start() {
     return proxyRequest(target, "POST", payload, reply);
   });
 
+  app.get("/ui-api/research", async (request, reply) => {
+    const url = new URL(`${apiBase}/research`);
+    const limit = (request.query as Record<string, string | undefined>)?.limit;
+    if (limit) {
+      url.searchParams.set("limit", String(limit));
+    }
+    return proxyRequest(url.toString(), "GET", undefined, reply);
+  });
+
   app.get("/ui-api/research/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const target = `${apiBase}/research/${id}`;

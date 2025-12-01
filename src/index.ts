@@ -7,7 +7,14 @@ import { z } from "zod";
 import { config } from "./config";
 import { logger } from "./logger";
 import { runMigrations } from "./migrate";
-import { enqueueJob, getJob, listNotes, listSteps, updateJobStatus } from "./repositories/jobRepository";
+import {
+  enqueueJob,
+  getJob,
+  listNotes,
+  listRecentJobs,
+  listSteps,
+  updateJobStatus,
+} from "./repositories/jobRepository";
 import { Worker } from "./services/worker";
 import { metricsRegistry } from "./metrics";
 
@@ -90,6 +97,25 @@ async function buildServer() {
     return { job_id: job.id, status: job.status };
   });
 
+  app.get("/research", async (request) => {
+    const query = z
+      .object({
+        limit: z.coerce.number().min(1).max(100).optional(),
+      })
+      .parse(request.query ?? {});
+    const jobs = await listRecentJobs(query.limit ?? 20);
+    return {
+      jobs: jobs.map((job) => ({
+        job_id: job.id,
+        question: job.question,
+        status: job.status,
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+        has_report: Boolean(job.final_report),
+      })),
+    };
+  });
+
   app.get("/research/:id", async (request) => {
     const params = idParamSchema.parse(request.params);
     return buildJobResponse(app, params.id);
@@ -113,6 +139,25 @@ async function buildServer() {
     const job = await createJobFromPayload(body, { source: "deep-research-ui" });
     reply.code(201);
     return { job_id: job.id, status: job.status };
+  });
+
+  app.get("/ui-api/research", async (request) => {
+    const query = z
+      .object({
+        limit: z.coerce.number().min(1).max(100).optional(),
+      })
+      .parse(request.query ?? {});
+    const jobs = await listRecentJobs(query.limit ?? 20);
+    return {
+      jobs: jobs.map((job) => ({
+        job_id: job.id,
+        question: job.question,
+        status: job.status,
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+        has_report: Boolean(job.final_report),
+      })),
+    };
   });
 
   app.get("/ui-api/research/:id", async (request) => {

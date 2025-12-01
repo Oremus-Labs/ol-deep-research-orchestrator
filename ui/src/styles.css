@@ -60,6 +60,14 @@ button:disabled {
   margin-bottom: 1rem;
 }
 
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  gap: 1rem;
+}
+
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -212,6 +220,11 @@ button:disabled {
   font-weight: 500;
 }
 
+.ghost-btn-sm {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+}
+
 .secondary-text {
   color: #94a3b8;
   font-size: 0.85rem;
@@ -244,6 +257,50 @@ button:disabled {
 .log-entry span {
   color: #94a3b8;
   min-width: 110px;
+}
+
+.job-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.job-list-item {
+  width: 100%;
+  border-radius: 0.6rem;
+  border: 1px solid #1f2937;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.job-list-item:hover {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.job-list-item.active {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.job-list-title {
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.job-list-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
 }
 
 .asset-link {
