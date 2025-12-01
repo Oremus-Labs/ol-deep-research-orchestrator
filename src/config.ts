@@ -40,6 +40,11 @@ const envSchema = z.object({
   MAX_CONTEXT: z.coerce.number().optional().default(131072),
   WARM_NOTES_LIMIT: z.coerce.number().optional().default(6),
   WARM_NOTES_IMPORTANCE_MIN: z.coerce.number().optional().default(3),
+  LONGFORM_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value?.toLowerCase() === "true")
+    .default("false" as unknown as boolean),
 });
 
 const env = envSchema.parse(process.env);
@@ -96,6 +101,9 @@ export const config = {
     maxNotesForSynth: env.MAX_NOTES_FOR_SYNTH,
     warmNotesLimit: env.WARM_NOTES_LIMIT,
     warmImportanceMin: env.WARM_NOTES_IMPORTANCE_MIN,
+  },
+  features: {
+    longformEnabled: Boolean(env.LONGFORM_ENABLED),
   },
 };
 
