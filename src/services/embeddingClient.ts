@@ -18,6 +18,23 @@ export async function embedText(text: string) {
     throw new Error("Embedding request failed");
   }
 
-  const data = (await response.json()) as { data: { embedding: number[] }[] };
-  return data.data?.[0]?.embedding ?? [];
+  const data: any = await response.json();
+
+  if (Array.isArray(data)) {
+    return data[0] ?? [];
+  }
+
+  if (Array.isArray(data?.embeddings)) {
+    return data.embeddings[0] ?? [];
+  }
+
+  if (Array.isArray(data?.data)) {
+    const first = data.data[0];
+    if (Array.isArray(first?.embedding)) {
+      return first.embedding;
+    }
+  }
+
+  logger.warn({ data }, "Unknown embedding response shape");
+  return [];
 }

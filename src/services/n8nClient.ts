@@ -25,7 +25,10 @@ export async function n8nWebSearch(query: string, numResults = 5) {
     throw new Error(`n8n web search failed (${response.status})`);
   }
 
-  const data = (await response.json()) as { results: SearchResult[] };
+  const data = (await response.json()) as { results: SearchResult[]; error?: string };
+  if (data.error) {
+    throw new Error(data.error);
+  }
   return data.results ?? [];
 }
 
@@ -46,10 +49,18 @@ export async function n8nFetchUrl(targetUrl: string) {
     throw new Error(`n8n fetch failed (${response.status})`);
   }
 
-  return (await response.json()) as {
+  const data = (await response.json()) as {
     url: string;
     title?: string;
     content?: string;
     meta?: Record<string, unknown>;
+    error?: string;
+    statusCode?: number;
   };
+
+  if (data.error) {
+    throw new Error(data.error);
+  }
+
+  return data;
 }
