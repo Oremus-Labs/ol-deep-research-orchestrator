@@ -20,7 +20,7 @@ async function buildServer() {
   await app.register(sensible);
 
   app.addHook("onRequest", async (request, reply) => {
-    if (request.url.startsWith("/healthz")) {
+    if (request.url.startsWith("/healthz") || request.url.startsWith("/metrics")) {
       return;
     }
     const header = request.headers["x-api-key"];
