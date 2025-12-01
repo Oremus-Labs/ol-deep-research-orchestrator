@@ -80,6 +80,30 @@ async function start() {
     return proxyRequest(target, "GET", undefined, reply);
   });
 
+  app.post("/ui-api/research/:id/cancel", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const target = `${apiBase}/research/${id}/cancel`;
+    return proxyRequest(target, "POST", undefined, reply);
+  });
+
+  app.post("/ui-api/research/:id/pause", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const target = `${apiBase}/research/${id}/pause`;
+    return proxyRequest(target, "POST", undefined, reply);
+  });
+
+  app.post("/ui-api/research/:id/start", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const target = `${apiBase}/research/${id}/start`;
+    return proxyRequest(target, "POST", undefined, reply);
+  });
+
+  app.delete("/ui-api/research/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const target = `${apiBase}/research/${id}`;
+    return proxyRequest(target, "DELETE", undefined, reply);
+  });
+
   app.listen({ port, host }, (err, address) => {
     if (err) {
       app.log.error(err, "failed to start UI server");
@@ -91,7 +115,7 @@ async function start() {
 
 async function proxyRequest(
   url: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   body: string | undefined,
   reply: FastifyReply,
 ) {
