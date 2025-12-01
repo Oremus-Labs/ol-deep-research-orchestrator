@@ -21,6 +21,10 @@ npm run start:ui         # starts the standalone UI proxy (uses DEEP_RESEARCH_AP
 
 The production container serves the UI at `/ui/` and exposes proxy endpoints under `/ui-api/*` so the browser never handles the orchestrator API key.
 
+### Feature flags
+
+- `LONGFORM_ENABLED` (default `false`) gates the new section-draft + citation-ledger pipeline. Leave it off for production until CL‑2/CL‑3 verification passes; flip via Helm (`features.longformEnabled=true`) when ready to exercise the long-form flow.
+
 ## API
 
 - `POST /research` – enqueue a job.

@@ -255,6 +255,14 @@ export async function listCitationLedger(
   return rows;
 }
 
+export async function getNextCitationNumber(jobId: string): Promise<number> {
+  const { rows } = await pool.query<{ max: number }>(
+    `SELECT COALESCE(MAX(citation_number), 0) AS max FROM citation_ledger WHERE job_id = $1`,
+    [jobId],
+  );
+  return (rows[0]?.max ?? 0) + 1;
+}
+
 export async function createSectionDraft(params: {
   jobId: string;
   sectionKey: string;

@@ -1,14 +1,21 @@
-import { NoteRecord, ResearchJob } from "../types/job";
+import { createHash } from "node:crypto";
+import { NoteRecord, ResearchJob, SourceRecord } from "../types/job";
 import { config } from "../config";
 import { logger } from "../logger";
 import {
   attachSource,
   claimNextQueuedJob,
+  createSectionDraft,
+  findCitationByHash,
+  getNextCitationNumber,
+  getSectionDraft,
+  insertCitationLedgerEntry,
   insertNote,
   insertStep,
   listNotes,
   listSourcesByJob,
   updateJobStatus,
+  updateSectionDraft,
   updateStep,
 } from "../repositories/jobRepository";
 import { chatCompletion } from "./llmClient";
@@ -47,6 +54,20 @@ interface CriticFeedback {
   follow_up?: string[];
   limitations?: string;
 }
+
+interface SectionSpec {
+  key: string;
+  title: string;
+  noteRoles: string[];
+  maxNotes: number;
+}
+
+const DEFAULT_SECTION_PLAN: SectionSpec[] = [
+  { key: "executive_summary", title: "Executive Summary", noteRoles: ["step_summary"], maxNotes: 6 },
+  { key: "background", title: "Background & Context", noteRoles: ["page_summary"], maxNotes: 8 },
+  { key: "analysis", title: "Analysis", noteRoles: ["step_summary"], maxNotes: 6 },
+  { key: "recommendations", title: "Recommendations", noteRoles: ["critic_note", "step_summary"], maxNotes: 4 },
+];
 
 export class Worker {
   private running = 0;
@@ -113,7 +134,12 @@ export class Worker {
     }
 
     try {
-      const { report: finalReport, critic } = await this.buildFinalReport(job);
+      if (config.features.longformEnabled) {
+        logger.info({ jobId: job.id }, "Longform pipeline enabled");
+      }
+      const { report: finalReport, critic } = config.features.longformEnabled
+        ? await this.buildLongformReport(job)
+        : await this.buildFinalReport(job);
       if (critic) {
         await this.recordCriticFeedback(job, critic);
       }
@@ -448,6 +474,142 @@ export class Worker {
     }
   }
 
+  private getSectionPlan(_job: ResearchJob): SectionSpec[] {
+    return DEFAULT_SECTION_PLAN;
+  }
+
+  private async buildLongformReport(job: ResearchJob): Promise<{
+    report: string;
+    critic?: CriticFeedback;
+  }> {
+    const sections = this.getSectionPlan(job);
+    const notes = await listNotes(job.id);
+    const sources = await listSourcesByJob(job.id);
+    const sourcesByNote = this.groupSourcesByNote(sources);
+    const renderedSections: string[] = [];
+
+    for (const section of sections) {
+      const content = await this.generateSectionDraft(job, section, notes, sourcesByNote);
+      if (content) {
+        renderedSections.push(content);
+      }
+    }
+
+    const combined = renderedSections.join("\n\n").trim();
+    const notesText = this.buildNotesEvidence(notes);
+    const critic = await this.runCriticEvaluation(combined, notesText);
+    const report = this.mergeCriticIntoDraft(combined, critic);
+    return { report, critic };
+  }
+
+  private async generateSectionDraft(
+    job: ResearchJob,
+    spec: SectionSpec,
+    notes: NoteRecord[],
+    sourcesByNote: Map<string, SourceRecord[]>,
+  ): Promise<string | null> {
+    const sorted = notes
+      .filter((note) => spec.noteRoles.includes(note.role))
+      .sort((a, b) => {
+        if (b.importance !== a.importance) return b.importance - a.importance;
+        return b.token_count - a.token_count;
+      })
+      .slice(0, spec.maxNotes);
+
+    if (!sorted.length) {
+      return null;
+    }
+
+    let draftRecord = await getSectionDraft(job.id, spec.key);
+    if (!draftRecord) {
+      draftRecord = await createSectionDraft({
+        jobId: job.id,
+        sectionKey: spec.key,
+      });
+    }
+
+    const paragraphs: string[] = [];
+    const citationMap: { noteId: string; citations: number[] }[] = [];
+    for (const note of sorted) {
+      const sources = sourcesByNote.get(note.id) ?? [];
+      const rendered = await this.renderNoteWithCitations(job.id, note, sources);
+      paragraphs.push(rendered.text);
+      if (rendered.citations.length) {
+        citationMap.push({ noteId: note.id, citations: rendered.citations });
+      }
+    }
+
+    const content = [`## ${spec.title}`, "", ...paragraphs].join("\n");
+
+    await updateSectionDraft(draftRecord.id, {
+      status: "completed",
+      tokens: estimateTokens(content),
+      content,
+      citationMap: { citations: citationMap },
+    });
+
+    logger.info({ jobId: job.id, section: spec.key }, "Section draft completed");
+    return content;
+  }
+
+  private async renderNoteWithCitations(
+    jobId: string,
+    note: NoteRecord,
+    sources: SourceRecord[],
+  ): Promise<{ text: string; citations: number[] }> {
+    const citations: number[] = [];
+    for (const source of sources) {
+      if (!source.url && !source.raw_storage_url) {
+        continue;
+      }
+      const number = await this.ensureCitationNumber(jobId, source);
+      citations.push(number);
+    }
+    const suffix = citations.length ? ` ${citations.map((n) => `[${n}]`).join("")}` : "";
+    return { text: `${note.content}${suffix}`, citations };
+  }
+
+  private async ensureCitationNumber(jobId: string, source: SourceRecord): Promise<number> {
+    const hash = this.hashSource(source);
+    let entry = await findCitationByHash(jobId, hash);
+    if (!entry) {
+      const next = await getNextCitationNumber(jobId);
+      entry = await insertCitationLedgerEntry({
+        jobId,
+        sourceHash: hash,
+        sourceId: source.id,
+        citationNumber: next,
+        title: source.title ?? source.url ?? undefined,
+        url: source.url ?? undefined,
+        accessedAt: new Date().toISOString(),
+      });
+    }
+    return entry.citation_number;
+  }
+
+  private hashSource(source: SourceRecord) {
+    const input = `${source.url ?? ""}|${source.title ?? ""}|${source.raw_storage_url ?? ""}`;
+    return createHash("sha1").update(input).digest("hex");
+  }
+
+  private groupSourcesByNote(sources: SourceRecord[]) {
+    const map = new Map<string, SourceRecord[]>();
+    for (const source of sources) {
+      if (!source.note_id) continue;
+      const list = map.get(source.note_id) ?? [];
+      list.push(source);
+      map.set(source.note_id, list);
+    }
+    return map;
+  }
+
+  private buildNotesEvidence(notes: NoteRecord[]) {
+    const selected = this.selectNotesForSynthesis(notes);
+    return selected
+      .slice(0, config.worker.maxNotesForSynth)
+      .map((note, idx) => `Note ${idx + 1} (${note.role}, importance ${note.importance}): ${note.content}`)
+      .join("\n\n");
+  }
   private async buildFinalReport(job: ResearchJob): Promise<{
     report: string;
     critic?: CriticFeedback;
@@ -479,24 +641,8 @@ export class Worker {
       },
     ]);
 
-    const criticInput = `Draft report:\n${draft}\n\nNotes:\n${notesText}`;
-    const criticRaw = await chatCompletion([
-      { role: "system", content: prompts.critic },
-      { role: "user", content: criticInput },
-    ]);
-
-    let critic: CriticFeedback | undefined;
-    try {
-      critic = JSON.parse(criticRaw);
-    } catch (error) {
-      logger.warn({ error }, "Critic output parse failed");
-    }
-
-    let finalReport = draft;
-    if (critic?.limitations) {
-      finalReport = `${draft}\n\nLimitations & Critic Notes:\n${critic.limitations}\nIssues: ${(critic.issues || []).join(", ")}`;
-    }
-    return { report: finalReport, critic };
+    const critic = await this.runCriticEvaluation(draft, notesText);
+    return { report: this.mergeCriticIntoDraft(draft, critic), critic };
   }
 
   private selectNotesForSynthesis(notes: NoteRecord[]) {
@@ -553,6 +699,29 @@ export class Worker {
       role: "cross_job_summary",
       importance: 4,
     });
+  }
+
+  private async runCriticEvaluation(draft: string, notesText: string) {
+    const criticInput = `Draft report:\n${draft}\n\nNotes:\n${notesText}`;
+    const criticRaw = await chatCompletion([
+      { role: "system", content: prompts.critic },
+      { role: "user", content: criticInput },
+    ]);
+
+    try {
+      return JSON.parse(criticRaw) as CriticFeedback;
+    } catch (error) {
+      logger.warn({ error }, "Critic output parse failed");
+      return undefined;
+    }
+  }
+
+  private mergeCriticIntoDraft(draft: string, critic?: CriticFeedback) {
+    if (!critic || !critic.limitations) {
+      return draft;
+    }
+    const issues = critic.issues?.length ? `\nIssues: ${critic.issues.join(", ")}` : "";
+    return `${draft}\n\nLimitations & Critic Notes:\n${critic.limitations}${issues}`;
   }
 
   private async indexNote(
