@@ -345,6 +345,26 @@ For each phase, append an entry in this format:
   - Repo state confirmed via `git log -1 --oneline` (orchestrator `38a7f31`, cluster `f2383f9`)
 - Outstanding follow-ups: none
 
+### Phase 1 – Clarification & Intake Workflow ✅
+- Code commits:
+  - ol-deep-research-orchestrator: 6439878
+  - ol-kubernetes-cluster: 96287a1
+  - ol-n8n: N/A
+- Docker image: ghcr.io/oremus-labs/ol-deep-research-orchestrator:gs-phase1b
+- Helm/AppSet updates: workloads.yaml imageTag=gs-phase1b for both orchestrator + UI (verified with `rg gs-phase1b clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`).
+- kubectl apply output: `applicationset.argoproj.io/oremus-labs-workloads configured` (from `kubectl apply -f clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`).
+- Argo sync commands:
+  - `kubectl -n argocd exec argo-cd-argocd-server-69f45c784-xkw9w -- argocd --core app sync workloads-deep-research-orchestrator`
+  - `kubectl -n argocd exec argo-cd-argocd-server-69f45c784-xkw9w -- argocd --core app sync workloads-deep-research-ui`
+- Validation:
+  - Job IDs tested: `8b9d9022-857d-4bda-8269-89aff6eff9a4` (prompt payload), `a058fcfd-944d-49d5-a37e-403ae78ced3c` (full run + clarifications).
+  - `curl -s -X POST https://deep-research-ui.oremuslabs.app/ui-api/research -d '{"question":"..."}'` returned `status="clarification_required"` and `GET /ui-api/research/<id>` exposed five `clarification_prompts`.
+  - `curl -s -X POST https://deep-research-ui.oremuslabs.app/ui-api/research/<id>/clarify -d '{"responses":{...}}'` transitioned the job to `queued` and populated metadata.
+  - Final `/ui-api/research/<job>` response shows `status="completed"`, empty `clarification_prompts`, and the metadata values echoed in the response for inclusion in prompts/UI.
+  - Orchestrator logs via `kubectl -n deep-research logs deployment/deep-research-orchestrator --since=5m | rg a058fcfd` capture the clarifications POST followed by `Starting job execution`, proving the worker only starts after clarifications land.
+  - Image versions on both deployments confirmed with `kubectl -n deep-research get deploy deep-research-{orchestrator,ui} -o jsonpath='{.spec.template.spec.containers[0].image}'` → `gs-phase1b`.
+- Outstanding follow-ups: none
+
 Always include the exact commands run (or reference to saved logs/screenshots) so future readers can reproduce the verification.
 
 ---
