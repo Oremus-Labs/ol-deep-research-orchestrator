@@ -347,22 +347,22 @@ For each phase, append an entry in this format:
 
 ### Phase 1 – Clarification & Intake Workflow ✅
 - Code commits:
-  - ol-deep-research-orchestrator: 6439878
-  - ol-kubernetes-cluster: 96287a1
+  - ol-deep-research-orchestrator: b51f93d
+  - ol-kubernetes-cluster: 333892d
   - ol-n8n: N/A
-- Docker image: ghcr.io/oremus-labs/ol-deep-research-orchestrator:gs-phase1b
-- Helm/AppSet updates: workloads.yaml imageTag=gs-phase1b for both orchestrator + UI (verified with `rg gs-phase1b clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`).
-- kubectl apply output: `applicationset.argoproj.io/oremus-labs-workloads configured` (from `kubectl apply -f clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`).
+- Docker image: ghcr.io/oremus-labs/ol-deep-research-orchestrator:gs-phase2clar2
+- Helm/AppSet updates: workloads.yaml imageTag=gs-phase2clar2 for both orchestrator + UI (verified with `rg gs-phase2clar2 clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`).
+- kubectl apply output: `applicationset.argoproj.io/oremus-labs-workloads configured` (from `kubectl apply -f clusters/oremus-labs/mgmt/root/appsets/workloads.yaml` after editing).
 - Argo sync commands:
-  - `kubectl -n argocd exec argo-cd-argocd-server-69f45c784-xkw9w -- argocd --core app sync workloads-deep-research-orchestrator`
-  - `kubectl -n argocd exec argo-cd-argocd-server-69f45c784-xkw9w -- argocd --core app sync workloads-deep-research-ui`
+  - `argocd --grpc-web app sync workloads-deep-research-orchestrator`
+  - `argocd --grpc-web app sync workloads-deep-research-ui`
 - Validation:
-  - Job IDs tested: `8b9d9022-857d-4bda-8269-89aff6eff9a4` (prompt payload), `a058fcfd-944d-49d5-a37e-403ae78ced3c` (full run + clarifications).
-  - `curl -s -X POST https://deep-research-ui.oremuslabs.app/ui-api/research -d '{"question":"..."}'` returned `status="clarification_required"` and `GET /ui-api/research/<id>` exposed five `clarification_prompts`.
-  - `curl -s -X POST https://deep-research-ui.oremuslabs.app/ui-api/research/<id>/clarify -d '{"responses":{...}}'` transitioned the job to `queued` and populated metadata.
-  - Final `/ui-api/research/<job>` response shows `status="completed"`, empty `clarification_prompts`, and the metadata values echoed in the response for inclusion in prompts/UI.
-  - Orchestrator logs via `kubectl -n deep-research logs deployment/deep-research-orchestrator --since=5m | rg a058fcfd` capture the clarifications POST followed by `Starting job execution`, proving the worker only starts after clarifications land.
-  - Image versions on both deployments confirmed with `kubectl -n deep-research get deploy deep-research-{orchestrator,ui} -o jsonpath='{.spec.template.spec.containers[0].image}'` → `gs-phase1b`.
+  - Job IDs tested: `29db8ab5-6af6-46ac-9c8a-3bc0b06b2938` (multi-turn question to test regeneration guard) and `1a1e936d-3845-4511-9605-1e21bb09adda` (full prompt ➜ clarifications ➜ queued ➜ cancel).
+  - `curl -s -X POST https://deep-research.oremuslabs.app/research -H 'x-api-key: …' -d '{"question":"Outline current risks with LLM-assisted coding in regulated industries"}'` returned `clarification_required` with six LLM-generated prompts tailored to the topic.
+  - `curl -s https://deep-research.oremuslabs.app/research/1a1e936d-... -H 'x-api-key: …' | jq '.clarification_prompts'` shows dynamic prompts (time horizon, scope, targets, jurisdictions, KPIs).
+  - `curl -s -X POST https://deep-research.oremuslabs.app/research/1a1e936d-.../clarify -d '{"responses":{...}}'` transitions the job to `queued` with empty `clarification_prompts`, confirming responses persist in metadata and the worker only starts once LLM prompts are satisfied.
+  - Orchestrator logs (`kubectl -n deep-research logs deployment/deep-research-orchestrator --since=5m | rg 1a1e936d`) show the clarification POST, metadata merge, and subsequent `Starting job execution`.
+  - Deployment images confirmed with `kubectl -n deep-research get deploy deep-research-{orchestrator,ui} -o jsonpath='{.spec.template.spec.containers[0].image}'` → both `gs-phase2clar2`.
 - Outstanding follow-ups: none
 
 ### Phase 2 – Multi-Phase Orchestrator & Planner Iterations ✅
