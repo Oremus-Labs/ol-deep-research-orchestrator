@@ -345,8 +345,11 @@ async function submitClarification(
     throw app.httpErrors.badRequest("Job does not require clarification");
   }
   const mergedMetadata = { ...(job.metadata ?? {}), ...responses };
-  const regeneratedPrompts = await generateClarificationPrompts(job.question, mergedMetadata);
-  const remaining = filterOutstandingPrompts(regeneratedPrompts, mergedMetadata);
+  let promptSet = (job.clarification_prompts as ClarificationPromptRecord[] | undefined) ?? [];
+  if (!promptSet.length) {
+    promptSet = await generateClarificationPrompts(job.question, mergedMetadata);
+  }
+  const remaining = filterOutstandingPrompts(promptSet, mergedMetadata);
   const nextStatus: JobStatus = remaining.length ? "clarification_required" : "queued";
   await updateJobClarifications({
     jobId: job.id,
