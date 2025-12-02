@@ -329,6 +329,20 @@ For each phase, append an entry in this format:
 - Outstanding follow-ups: <none or details>
 ```
 
+### Phase 0 – Baseline Verification ✅
+- Code commits:
+  - ol-deep-research-orchestrator: 38a7f31
+  - ol-kubernetes-cluster: f2383f9
+  - ol-n8n: N/A
+- Docker image: ghcr.io/oremus-labs/ol-deep-research-orchestrator:cl3-proxy1
+- Helm/AppSet updates: workloads.yaml imageTag=cl3-proxy1 (verified via `rg cl3-proxy1 clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`)
+- kubectl apply output: N/A (baseline already deployed)
+- Argo sync commands: N/A (not run; deployments already healthy)
+- Validation:
+  - Deployment images checked via `kubectl -n deep-research get deploy deep-research-{orchestrator,ui} -o jsonpath='{.spec.template.spec.containers[0].image}'` → both `cl3-proxy1`
+  - Repo state confirmed via `git log -1 --oneline` (orchestrator `38a7f31`, cluster `f2383f9`)
+- Outstanding follow-ups: none
+
 Always include the exact commands run (or reference to saved logs/screenshots) so future readers can reproduce the verification.
 
 ---
