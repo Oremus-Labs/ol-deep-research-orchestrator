@@ -50,6 +50,8 @@ interface PlannedStep {
   title: string;
   tool_hint?: string;
   objective?: string;
+  theme?: string;
+  iteration: number;
 }
 
 interface SummarizerOutput {
@@ -64,6 +66,14 @@ interface WarmNote {
   role?: string;
   importance: number;
   jobId?: string;
+}
+
+interface ThemeBlueprint {
+  key: string;
+  title: string;
+  objective: string;
+  toolHint?: string;
+  required: boolean;
 }
 
 interface CriticFeedback {
@@ -95,6 +105,8 @@ const DEFAULT_SECTION_PLAN: SectionSpec[] = [
   { key: "analysis", title: "Analysis", noteRoles: ["step_summary"], maxNotes: 6 },
   { key: "recommendations", title: "Recommendations", noteRoles: ["critic_note", "step_summary"], maxNotes: 4 },
 ];
+
+const ITERATION_TOKENS_PER_STEP_ESTIMATE = 750;
 
 export class Worker {
   private running = 0;
@@ -157,39 +169,118 @@ export class Worker {
     jobStatusCounter.labels("started").inc();
     const existingSteps = await listSteps(job.id);
     logger.info({ jobId: job.id, existingSteps: existingSteps.length }, "Loaded existing steps for job");
-    let steps: { plan: PlannedStep; record: ResearchStep }[] = [];
+    const themeBlueprints = this.deriveThemes(job);
+    const steps: { plan: PlannedStep; record: ResearchStep }[] = [];
+    let maxStepOrder = 0;
 
     await this.ensureJobActive(job.id);
 
     if (!existingSteps.length) {
-      const stepsPlan = await this.planSteps(job);
+      const stepsPlan = await this.planSteps(job, themeBlueprints);
       if (!stepsPlan.length) {
         jobStatusCounter.labels("error").inc();
         stopJobTimer({ status: "error" });
         throw new Error("No steps planned");
       }
-      for (let i = 0; i < stepsPlan.length; i += 1) {
-        const plan = stepsPlan[i];
-        const inserted = await insertStep(job.id, plan.title, i + 1, plan.tool_hint);
+      for (const plan of stepsPlan) {
+        maxStepOrder += 1;
+        const inserted = await insertStep(
+          job.id,
+          plan.title,
+          maxStepOrder,
+          plan.tool_hint,
+          plan.theme,
+          plan.iteration,
+        );
         steps.push({ plan, record: inserted });
       }
     } else {
       logger.info({ jobId: job.id }, "Resuming job with existing steps");
-      steps = existingSteps.map((record) => ({
-        plan: { title: record.title, tool_hint: record.tool_hint ?? undefined },
-        record,
-      }));
+      existingSteps
+        .sort((a, b) => a.step_order - b.step_order)
+        .forEach((record) => {
+          steps.push({
+            plan: {
+              title: record.title,
+              tool_hint: record.tool_hint ?? undefined,
+              objective: (record.result as Record<string, unknown> | null)?.objective as
+                | string
+                | undefined,
+              theme: record.theme ?? undefined,
+              iteration: record.iteration ?? 0,
+            },
+            record,
+          });
+          if (record.step_order > maxStepOrder) {
+            maxStepOrder = record.step_order;
+          }
+        });
     }
+
+    let iterationCounter = steps.reduce(
+      (max, current) => Math.max(max, current.record.iteration ?? 0),
+      0,
+    );
+    let stepIndex = 0;
+    const maxSteps = job.max_steps ?? config.worker.maxSteps;
+
     await touchJobHeartbeat(job.id);
 
-    for (const step of steps) {
+    while (stepIndex < steps.length) {
       await this.ensureJobActive(job.id);
-      if (this.isStepComplete(step.record.status)) {
-        continue;
+      const current = steps[stepIndex];
+      if (!this.isStepComplete(current.record.status)) {
+        const status = await this.executeStep(
+          job,
+          current.plan,
+          current.record.id,
+          current.record.step_order,
+        );
+        current.record.status = status;
       }
-      await this.executeStep(job, step.plan, step.record.id, step.record.step_order);
+      stepIndex += 1;
       await touchJobHeartbeat(job.id);
       await this.ensureJobActive(job.id);
+
+      if (stepIndex === steps.length) {
+        const coverage = await this.evaluateCoverage(job, steps, themeBlueprints);
+        const remainingSlots = Math.max(0, maxSteps - steps.length);
+        const tokensRemaining = this.iterationTokensRemaining(steps);
+        if (
+          !coverage.complete &&
+          iterationCounter < config.worker.maxIterations &&
+          remainingSlots > 0 &&
+          tokensRemaining > 0
+        ) {
+          const followUps = this.planFollowupSteps(
+            job,
+            coverage.missingThemes,
+            iterationCounter + 1,
+            remainingSlots,
+            themeBlueprints,
+            tokensRemaining,
+          );
+          if (followUps.length) {
+            iterationCounter += 1;
+            for (const plan of followUps) {
+              maxStepOrder += 1;
+              const inserted = await insertStep(
+                job.id,
+                plan.title,
+                maxStepOrder,
+                plan.tool_hint,
+                plan.theme,
+                plan.iteration,
+              );
+              steps.push({ plan, record: inserted });
+            }
+            logger.info(
+              { jobId: job.id, iteration: iterationCounter, missingThemes: coverage.missingThemes },
+              "Coverage incomplete, planned follow-up steps",
+            );
+          }
+        }
+      }
     }
 
     try {
@@ -244,7 +335,23 @@ export class Worker {
     return status === "completed" || status === "partial";
   }
 
-  private async planSteps(job: ResearchJob): Promise<PlannedStep[]> {
+  private async planSteps(job: ResearchJob, themes: ThemeBlueprint[]): Promise<PlannedStep[]> {
+    const maxSteps = job.max_steps ?? config.worker.maxSteps;
+    const heuristics = themes
+      .slice(0, maxSteps)
+      .map((theme) => ({
+        title: theme.title,
+        tool_hint: theme.toolHint,
+        objective: theme.objective,
+        theme: theme.key,
+        iteration: 0,
+      }));
+
+    if (heuristics.length) {
+      return heuristics;
+    }
+
+    // Fallback to the legacy planner prompt when heuristics are unavailable.
     const priorNotes = await listNotes(job.id);
     const priorContext = priorNotes
       .filter((n) => n.role === "cross_job_summary" || n.role === "step_summary")
@@ -266,9 +373,7 @@ export class Worker {
     }
     const combinedContext = contextSections.join("\n\n") || "(none)";
 
-    const maxSteps = job.max_steps ?? config.worker.maxSteps;
     const plannerPrompt = prompts.planner.replace("{{MAX_STEPS}}", String(maxSteps));
-
     const response = await chatCompletion([
       { role: "system", content: plannerPrompt },
       {
@@ -279,18 +384,26 @@ export class Worker {
 
     try {
       const parsed = JSON.parse(response);
-      if (Array.isArray(parsed)) {
-        return parsed.slice(0, maxSteps);
+      if (Array.isArray(parsed) && parsed.length) {
+        return parsed.slice(0, maxSteps).map((item: PlannedStep, index: number) => ({
+          title: item.title,
+          tool_hint: item.tool_hint,
+          objective: item.objective,
+          iteration: 0,
+          theme: index === 0 ? "overview" : undefined,
+        }));
       }
     } catch (error) {
-      logger.warn({ error }, "Failed to parse planner output, falling back");
+      logger.warn({ error }, "Failed to parse planner output, falling back to default plan");
     }
 
     return [
       {
         title: "Perform initial web research",
         tool_hint: "searxng",
-        objective: "Find authoritative overviews and primary sources",
+        objective: `Find authoritative overviews and primary sources for "${job.question}"`,
+        theme: "overview",
+        iteration: 0,
       },
     ];
   }
@@ -300,7 +413,7 @@ export class Worker {
     plan: PlannedStep,
     stepId: string,
     stepOrder: number,
-  ) {
+  ): Promise<ResearchStep["status"]> {
     await this.ensureJobActive(job.id);
     await updateStep(stepId, "running");
     await touchJobHeartbeat(job.id);
@@ -309,7 +422,7 @@ export class Worker {
     if (!results.length) {
       await updateStep(stepId, "partial", { error: "No search results" });
       await touchJobHeartbeat(job.id);
-      return;
+      return "partial";
     }
 
     const sources = [] as {
@@ -390,8 +503,13 @@ export class Worker {
       });
     }
 
-    await updateStep(stepId, "completed", { sources: sources.length });
+    await updateStep(stepId, "completed", {
+      sources: sources.length,
+      objective: plan.objective,
+      theme: plan.theme,
+    });
     await touchJobHeartbeat(job.id);
+    return "completed";
   }
 
   private async runSearch(toolHint = "searxng", query: string) {
@@ -528,6 +646,185 @@ export class Worker {
         step_importance: 2,
       };
     }
+  }
+
+  private deriveThemes(job: ResearchJob): ThemeBlueprint[] {
+    const metadata = (job.metadata ?? {}) as Record<string, unknown>;
+    const question = job.question.toLowerCase();
+    const depth = (job.options?.depth ?? job.depth ?? "normal").toString();
+    const region = this.normalizeMetadataString(metadata.region_focus);
+    const integrationTargets = this.normalizeMetadataArray(metadata.integration_targets);
+
+    const blueprints: ThemeBlueprint[] = [
+      {
+        key: "overview",
+        title: "Perform initial web research",
+        objective: `Collect primers and authoritative descriptions for "${job.question}" before diving deeper.`,
+        toolHint: "searxng",
+        required: true,
+      },
+    ];
+
+    const wantsRegulation =
+      Boolean(region) || /regulat|compliance|policy|law|gdpr|sox/.test(question);
+    if (wantsRegulation) {
+      blueprints.push({
+        key: "regulation",
+        title: "Map the regulatory and compliance landscape",
+        objective: region
+          ? `Document region-specific regulations and compliance expectations for ${region}.`
+          : "Identify the primary regulatory obligations and compliance frameworks impacting this topic.",
+        toolHint: "searxng",
+        required: true,
+      });
+    }
+
+    const wantsPerformance =
+      depth === "deep" || /performance|scalability|latency|throughput|architecture/.test(question);
+    if (wantsPerformance) {
+      blueprints.push({
+        key: "performance",
+        title: "Evaluate architecture, scalability, and performance",
+        objective:
+          "Gather benchmarks, architectural patterns, and performance considerations to understand technical viability.",
+        toolHint: "firecrawl",
+        required: true,
+      });
+    }
+
+    const wantsCost = /cost|roi|budget|pricing|spend|tco/.test(question);
+    if (wantsCost) {
+      blueprints.push({
+        key: "cost",
+        title: "Analyze cost drivers and ROI scenarios",
+        objective: "Capture pricing models, ROI studies, and budgeting guidance relevant to the question.",
+        toolHint: "ddg_mcp",
+        required: true,
+      });
+    }
+
+    if (integrationTargets.length || /integration|adoption|workflow|deployment/.test(question)) {
+      blueprints.push({
+        key: "integration",
+        title: "Investigate integration patterns and downstream consumers",
+        objective:
+          integrationTargets.length
+            ? `Collect best practices for integrating with ${integrationTargets.join(", ")}.`
+            : "Identify how enterprises integrate this capability into existing systems and workflows.",
+        toolHint: "n8n",
+        required: true,
+      });
+    }
+
+    blueprints.push({
+      key: "risk",
+      title: "Surface risks, gaps, and open questions",
+      objective:
+        "Call out operational, security, or organizational risks plus any unanswered questions that need to be highlighted in the final report.",
+      toolHint: "analysis",
+      required: true,
+    });
+
+    return blueprints;
+  }
+
+  private planFollowupSteps(
+    job: ResearchJob,
+    missingThemes: string[],
+    iteration: number,
+    remainingSlots: number,
+    blueprints: ThemeBlueprint[],
+    tokensRemaining: number,
+  ): PlannedStep[] {
+    const tokenLimitedSlots = Number.isFinite(tokensRemaining)
+      ? Math.floor(tokensRemaining / ITERATION_TOKENS_PER_STEP_ESTIMATE)
+      : remainingSlots;
+    const capacity = Math.max(0, Math.min(remainingSlots, tokenLimitedSlots));
+    if (capacity <= 0) {
+      return [];
+    }
+
+    const followUps: PlannedStep[] = [];
+    for (const themeKey of missingThemes) {
+      if (followUps.length >= capacity) {
+        break;
+      }
+      const blueprint = blueprints.find((theme) => theme.key === themeKey);
+      if (!blueprint) {
+        continue;
+      }
+      followUps.push({
+        title: `Follow-up: ${blueprint.title}`,
+        tool_hint: blueprint.toolHint ?? "analysis",
+        objective: `Close gaps in ${blueprint.title.toLowerCase()} for "${job.question}" by gathering new sources and evidence.`,
+        theme: blueprint.key,
+        iteration,
+      });
+    }
+
+    if (!followUps.length && capacity > 0) {
+      followUps.push({
+        title: "Investigate unresolved angles",
+        tool_hint: "analysis",
+        objective: "Dive into any newly surfaced questions or contradictions before final synthesis.",
+        theme: "analysis",
+        iteration,
+      });
+    }
+
+    return followUps;
+  }
+
+  private evaluateCoverage(
+    job: ResearchJob,
+    steps: { plan: PlannedStep; record: ResearchStep }[],
+    blueprints: ThemeBlueprint[],
+  ) {
+    const hasThemeData = steps.some((entry) => Boolean(entry.record.theme));
+    if (!hasThemeData) {
+      return { complete: true, missingThemes: [] };
+    }
+    const requiredThemes = blueprints.filter((theme) => theme.required).map((theme) => theme.key);
+    const completedThemes = new Set(
+      steps
+        .filter((entry) => this.isStepComplete(entry.record.status) && entry.record.theme)
+        .map((entry) => entry.record.theme as string),
+    );
+    const missingThemes = requiredThemes.filter((theme) => !completedThemes.has(theme));
+    if (!missingThemes.length) {
+      return { complete: true, missingThemes: [] };
+    }
+    logger.debug({ jobId: job.id, missingThemes }, "Coverage gaps detected");
+    return { complete: false, missingThemes };
+  }
+
+  private iterationTokensRemaining(steps: { plan: PlannedStep; record: ResearchStep }[]) {
+    if (!config.worker.iterationTokenBudget) {
+      return Number.POSITIVE_INFINITY;
+    }
+    const iterationSteps = steps.filter((entry) => (entry.record.iteration ?? 0) > 0).length;
+    const consumed = iterationSteps * ITERATION_TOKENS_PER_STEP_ESTIMATE;
+    return Math.max(0, config.worker.iterationTokenBudget - consumed);
+  }
+
+  private normalizeMetadataArray(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.map((entry) => String(entry)).filter((entry) => entry.trim().length > 0);
+    }
+    if (typeof value === "string" && value.trim().length) {
+      return value
+        .split(/[,;/]/)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    }
+    return [];
+  }
+
+  private normalizeMetadataString(value: unknown): string | undefined {
+    if (typeof value === "string" && value.trim().length) {
+      return value.trim();
+    }
+    return undefined;
   }
 
   private async fetchWarmNotes(job: ResearchJob): Promise<WarmNote[]> {

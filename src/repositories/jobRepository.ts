@@ -113,12 +113,14 @@ export async function insertStep(
   title: string,
   order: number,
   toolHint?: string,
+  theme?: string,
+  iteration?: number,
 ) {
   const { rows } = await pool.query(
-    `INSERT INTO research_steps (job_id, title, step_order, status, tool_hint)
-     VALUES ($1, $2, $3, 'pending', $4)
+    `INSERT INTO research_steps (job_id, title, step_order, status, tool_hint, theme, iteration)
+     VALUES ($1, $2, $3, 'pending', $4, $5, $6)
      RETURNING *`,
-    [jobId, title, order, toolHint ?? null],
+    [jobId, title, order, toolHint ?? null, theme ?? null, iteration ?? 0],
   );
   return rows[0];
 }

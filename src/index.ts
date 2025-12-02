@@ -355,6 +355,8 @@ async function buildJobResponse(app: FastifyInstance, jobId: string) {
       status: step.status,
       order: step.step_order,
       tool_hint: step.tool_hint,
+      theme: step.theme,
+      iteration: step.iteration ?? 0,
     })),
     progress: {
       total_steps: steps.length,

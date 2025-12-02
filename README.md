@@ -25,6 +25,12 @@ The production container serves the UI at `/ui/` and exposes proxy endpoints und
 
 - `LONGFORM_ENABLED` (default `false`) gates the new section-draft + citation-ledger pipeline. Leave it off for production until CL‑2/CL‑3 verification passes; flip via Helm (`features.longformEnabled=true`) when ready to exercise the long-form flow.
 
+### Planner iteration controls
+
+- `MAX_ITERATIONS` limits how many planner → execution loops can be scheduled after the initial pass (default `2`).
+- `ITERATION_TOKEN_BUDGET` is an approximate token ceiling for those follow-up steps; each additional step consumes about 750 tokens of the allowance (default `12000`).
+  Tune these values in the Helm chart or environment to make the orchestrator more or less aggressive when chasing missing coverage.
+
 ## API
 
 - `POST /research` – enqueue a job.

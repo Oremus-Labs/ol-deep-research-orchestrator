@@ -33,6 +33,8 @@ export interface ResearchStep {
   tool_hint?: string | null;
   status: JobStatus | "pending" | "partial";
   step_order: number;
+  theme?: string | null;
+  iteration?: number | null;
   result?: Record<string, unknown> | null;
   created_at?: string;
   updated_at?: string;

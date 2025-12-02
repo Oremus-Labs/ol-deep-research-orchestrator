@@ -39,6 +39,8 @@ const envSchema = z.object({
   MAX_EMBED_TOKENS: z.coerce.number().optional().default(512),
   MAX_NOTES_FOR_SYNTH: z.coerce.number().optional().default(64),
   MAX_CONTEXT: z.coerce.number().optional().default(131072),
+  MAX_ITERATIONS: z.coerce.number().optional().default(2),
+  ITERATION_TOKEN_BUDGET: z.coerce.number().optional().default(12000),
   WARM_NOTES_LIMIT: z.coerce.number().optional().default(6),
   WARM_NOTES_IMPORTANCE_MIN: z.coerce.number().optional().default(3),
   RESCUE_HEARTBEAT_SECONDS: z.coerce.number().optional().default(600),
@@ -104,6 +106,8 @@ export const config = {
     maxSteps: env.MAX_STEPS,
     maxJobSeconds: env.MAX_JOB_SECONDS,
     maxNotesForSynth: env.MAX_NOTES_FOR_SYNTH,
+    maxIterations: env.MAX_ITERATIONS,
+    iterationTokenBudget: env.ITERATION_TOKEN_BUDGET,
     warmNotesLimit: env.WARM_NOTES_LIMIT,
     warmImportanceMin: env.WARM_NOTES_IMPORTANCE_MIN,
     rescue: {

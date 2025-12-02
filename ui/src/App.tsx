@@ -1021,6 +1021,14 @@ export default function App() {
                       {step.tool_hint ? (
                         <p className="secondary-text">Tool hint: {step.tool_hint}</p>
                       ) : null}
+                      {step.theme ? (
+                        <p className="secondary-text">
+                          Theme: {formatMetadataLabel(step.theme)}
+                          {typeof step.iteration === "number" && step.iteration > 0
+                            ? ` • Iteration ${step.iteration}`
+                            : ""}
+                        </p>
+                      ) : null}
                     </li>
                   ))}
                   {isFinalizing ? (

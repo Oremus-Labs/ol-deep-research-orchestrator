@@ -13,6 +13,8 @@ export interface JobStep {
   status: JobStatus | "pending" | "partial";
   order: number;
   tool_hint?: string | null;
+  theme?: string | null;
+  iteration?: number | null;
 }
 
 export interface ClarificationPrompt {
