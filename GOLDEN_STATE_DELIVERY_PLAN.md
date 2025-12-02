@@ -2,6 +2,8 @@
 
 This document is the definitive playbook for taking our current Deep Research system to the ChatGPT-grade “golden state.” It captures the latest verified status, the exact work items ahead (code + UI + devops), and the validation evidence required before each phase is marked complete. By following it line-by-line we can maintain context, avoid regressions, and continue after a context reset without ambiguity.
 
+> **Prerequisite:** Always review the primary reference design, `Designing a Production-Ready Multi-Phase Deep Research Pipeline for Enterprises.docx.md`, and the THOUGHTFLOW transcript before executing any phase. This plan derives every requirement from those sources; reading them first prevents misinterpretation.
+
 ### How to Use This Document
 1. **Read the Current Baseline** (Section 0) so you know what code/tag is live.
 2. **Identify the phase** you are executing (e.g., “Phase 1 – Clarification & Intake”).
