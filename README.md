@@ -36,9 +36,35 @@ The production container serves the UI at `/ui/` and exposes proxy endpoints und
 - `DELETE /research/:id` – delete a non-running job (cascades to steps/notes/sources).
 - `GET /healthz` – readiness probe.
 - `POST /ui-api/research`, `GET /ui-api/research` & `GET /ui-api/research/:id` – server-side proxies consumed by the Deep Research UI (no `X-API-Key` required).
-- `POST /ui-api/research/:id/{cancel|pause|start}` and `DELETE /ui-api/research/:id` expose the same management actions to the web UI without requiring the API key.
+- `POST /ui-api/research/:id/{clarify|cancel|pause|start}` and `DELETE /ui-api/research/:id` expose the same management actions to the web UI without requiring the API key.
 
 All orchestrator endpoints (except `/healthz`, `/metrics`, `/ui`, and `/ui-api/*`) require an `X-API-Key` header matching `ORCH_API_KEY`. The `/ui-api` routes proxy authenticated calls on behalf of the browser UI.
+
+## Clarification Workflow & Required Metadata
+
+Before the planner can execute, every job must include the same context ChatGPT Deep Research collects via its clarification questions. If any of these fields are missing, the orchestrator sets the job status to `clarification_required`, the worker skips it, and the UI surfaces the prompts until an operator fills them in:
+
+- **time_horizon** – what time window to cover (current, 12-18 months, multi-year outlook).
+- **region_focus** – the primary geography/regulatory domain (US, EU/GDPR, APAC, etc.).
+- **data_modalities** – which modalities are in scope (blogs, PDFs, scraped HTML, structured CSV/JSON, etc.).
+- **integration_targets** – downstream systems that must ingest the report (knowledge graph, SharePoint, MDM, ticketing, etc.).
+- **quality_constraints** – tone/compliance expectations, red lines, or SME sign-off requirements.
+
+Submit clarifications via the UI panel or `POST /ui-api/research/:id/clarify` with a body such as:
+
+```json
+{
+  "responses": {
+    "time_horizon": "6-12 month roadmap",
+    "region_focus": "US + EU",
+    "data_modalities": "blogs, PDFs, CSV",
+    "integration_targets": "sharepoint, knowledge-graph",
+    "quality_constraints": "objective tone, cite every section"
+  }
+}
+```
+
+Once every required field has a value, the orchestrator automatically returns the job to the `queued` state and the worker begins planning.
 
 ## Inspecting Completed Jobs
 

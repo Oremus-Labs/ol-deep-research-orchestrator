@@ -16,17 +16,19 @@ interface EnqueueInput {
   depth?: string;
   maxSteps?: number;
   maxDurationSeconds?: number;
+  status?: JobStatus;
 }
 
 export async function enqueueJob(input: EnqueueInput): Promise<ResearchJob> {
   const result = await pool.query<ResearchJob>(
     `INSERT INTO research_jobs (question, options, metadata, status, depth, max_steps, max_duration_seconds)
-     VALUES ($1, $2, $3, 'queued', $4, $5, $6)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
     [
       input.question,
       input.options ?? {},
       input.metadata ?? {},
+      input.status ?? "queued",
       input.depth ?? null,
       input.maxSteps ?? null,
       input.maxDurationSeconds ?? null,

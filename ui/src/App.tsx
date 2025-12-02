@@ -3,10 +3,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   CreateJobPayload,
+  JobAssets,
   JobListItem,
   JobListResponse,
   JobResponse,
   JobStatus,
+  JobStep,
 } from "./types";
 
 type DepthOption = "quick" | "normal" | "deep";
@@ -19,6 +21,13 @@ type LogEntry = {
 
 type JobAction = "pause" | "start" | "cancel" | "delete";
 
+const resolveStepOrder = (order: JobStep["order"], fallbackIndex: number) => {
+  if (typeof order === "number" && Number.isFinite(order) && order > 0) {
+    return order;
+  }
+  return fallbackIndex + 1;
+};
+
 const POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "error", "cancelled"];
 const STATUS_LABEL: Record<JobStatus, string> = {
@@ -28,7 +37,16 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   error: "Error",
   cancelled: "Cancelled",
   paused: "Paused",
+  clarification_required: "Needs Clarification",
 };
+
+const REQUIRED_METADATA_KEYS = [
+  "time_horizon",
+  "region_focus",
+  "data_modalities",
+  "integration_targets",
+  "quality_constraints",
+] as const;
 
 interface FormState {
   question: string;
@@ -72,6 +90,14 @@ const truncateText = (value: string, maxLength = 90) => {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 };
 
+const formatMetadataLabel = (value: string) => {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 function StatusBadge({ status }: { status: JobStatus }) {
   return (
     <span className={`status-badge status-${status}`}>
@@ -95,27 +121,33 @@ function EmptyState() {
 
 function AssetsTable({ job }: { job: JobResponse }) {
   if (!job.assets) return null;
-  const rows = [
-    {
-      label: "Markdown",
-      url: job.assets.markdown_url,
-      checksum: job.assets.checksums?.markdown,
+  const assetEntries = [
+    { label: "Markdown", format: "markdown" as const, checksum: job.assets.checksums?.markdown },
+    { label: "PDF", format: "pdf" as const, checksum: job.assets.checksums?.pdf },
+    { label: "DOCX", format: "docx" as const, checksum: job.assets.checksums?.docx },
+  ];
+  const rows = assetEntries.reduce(
+    (acc, entry) => {
+      const assetUrl = job.assets?.[`${entry.format}_url` as keyof JobAssets];
+      if (!assetUrl) {
+        return acc;
+      }
+      acc.push({
+        label: entry.label,
+        format: entry.format,
+        checksum: entry.checksum,
+      });
+      return acc;
     },
-    {
-      label: "PDF",
-      url: job.assets.pdf_url,
-      checksum: job.assets.checksums?.pdf,
-    },
-    {
-      label: "DOCX",
-      url: job.assets.docx_url,
-      checksum: job.assets.checksums?.docx,
-    },
-  ].filter((row) => row.url);
+    [] as { label: string; format: "markdown" | "pdf" | "docx"; checksum?: string }[],
+  );
 
   if (!rows.length) {
     return null;
   }
+
+  const buildDownloadUrl = (format: "markdown" | "pdf" | "docx") =>
+    `/ui-api/research/${job.job_id}/report/${format}`;
 
   return (
     <div className="card">
@@ -134,7 +166,12 @@ function AssetsTable({ job }: { job: JobResponse }) {
               <td>{row.label}</td>
               <td className="secondary-text">{row.checksum ?? "—"}</td>
               <td>
-                <a href={row.url} target="_blank" rel="noreferrer" className="asset-link">
+                <a
+                  href={buildDownloadUrl(row.format)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="asset-link"
+                >
                   Download
                 </a>
               </td>
@@ -197,6 +234,9 @@ export default function App() {
   const [jobListError, setJobListError] = useState<string | null>(null);
   const [jobActionError, setJobActionError] = useState<string | null>(null);
   const [actionInFlight, setActionInFlight] = useState<JobAction | null>(null);
+  const [clarificationDraft, setClarificationDraft] = useState<Record<string, string>>({});
+  const [clarificationSubmitting, setClarificationSubmitting] = useState(false);
+  const [clarificationError, setClarificationError] = useState<string | null>(null);
   const prevStepStatuses = useRef(new Map<string, string>());
   const prevJobStatus = useRef<JobStatus | null>(null);
   const activeJobId = job?.job_id ?? jobId;
@@ -295,6 +335,8 @@ export default function App() {
         updated_at: timestamp,
         final_report: null,
         assets: null,
+        metadata: payload.metadata ?? {},
+        clarification_prompts: [],
         steps: [],
         progress: { total_steps: 0, completed_steps: 0 },
         notes: [],
@@ -328,6 +370,9 @@ export default function App() {
     prevJobStatus.current = null;
     setJobActionError(null);
     setActionInFlight(null);
+    setClarificationDraft({});
+    setClarificationError(null);
+    setClarificationSubmitting(false);
   };
 
   const handleSelectExistingJob = (selectedId: string) => {
@@ -390,6 +435,47 @@ export default function App() {
     [job, refreshJobList],
   );
 
+  const handleClarificationInputChange = (key: string, value: string) => {
+    setClarificationDraft((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleClarificationSubmit = async () => {
+    if (!job) return;
+    const prompts = job.clarification_prompts ?? [];
+    const responses: Record<string, string> = {};
+    prompts.forEach((prompt) => {
+      const value = clarificationDraft[prompt.key]?.trim();
+      if (value) {
+        responses[prompt.key] = value;
+      }
+    });
+    if (!Object.keys(responses).length) {
+      setClarificationError("Provide clarification details before submitting.");
+      return;
+    }
+    setClarificationSubmitting(true);
+    try {
+      const response = await fetch(`/ui-api/research/${job.job_id}/clarify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ responses }),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Failed to submit clarification");
+      }
+      const payload = (await response.json()) as JobResponse;
+      setJob(payload);
+      setClarificationError(null);
+    } catch (error) {
+      setClarificationError(
+        error instanceof Error ? error.message : "Failed to submit clarifications",
+      );
+    } finally {
+      setClarificationSubmitting(false);
+    }
+  };
+
   useEffect(() => {
     void refreshJobList();
     const interval = window.setInterval(() => {
@@ -447,7 +533,8 @@ export default function App() {
       });
       prevJobStatus.current = job.status;
     }
-    job.steps.forEach((step) => {
+    job.steps.forEach((step, index) => {
+      const displayOrder = resolveStepOrder(step.order, index);
       const previous = prevStepStatuses.current.get(step.id);
       if (!previous) {
         prevStepStatuses.current.set(step.id, step.status);
@@ -455,7 +542,7 @@ export default function App() {
           newEntries.push({
             id: `${step.id}-${step.status}`,
             timestamp: job.updated_at ?? new Date().toISOString(),
-            message: `Step ${step.order + 1}: "${step.title}" is ${step.status}`,
+            message: `Step ${displayOrder}: "${step.title}" is ${step.status}`,
           });
         }
       } else if (previous !== step.status) {
@@ -463,13 +550,58 @@ export default function App() {
         newEntries.push({
           id: `${step.id}-${step.status}-${Date.now()}`,
           timestamp: job.updated_at ?? new Date().toISOString(),
-          message: `Step ${step.order + 1} is now ${step.status}`,
+          message: `Step ${displayOrder} is now ${step.status}`,
         });
       }
     });
     if (newEntries.length) {
       setLogs((prev) => [...newEntries, ...prev].slice(0, 200));
     }
+  }, [job]);
+
+  const metadataEntries = useMemo(() => {
+    if (!job?.metadata) return [] as { key: string; label: string; value: string }[];
+    return Object.entries(job.metadata)
+      .filter(([_, value]) => {
+        if (value === null || value === undefined) {
+          return false;
+        }
+        if (typeof value === "string") {
+          return value.trim().length > 0;
+        }
+        if (Array.isArray(value)) {
+          return value.length > 0;
+        }
+        if (typeof value === "object") {
+          return Object.keys(value as Record<string, unknown>).length > 0;
+        }
+        return true;
+      })
+      .map(([key, value]) => {
+        let rendered = "";
+        if (Array.isArray(value)) {
+          rendered = value.map((entry) => String(entry)).join(", ");
+        } else if (typeof value === "object") {
+          rendered = JSON.stringify(value);
+        } else {
+          rendered = String(value);
+        }
+        const priorityIndex = REQUIRED_METADATA_KEYS.indexOf(
+          key as (typeof REQUIRED_METADATA_KEYS)[number],
+        );
+        return {
+          key,
+          label: formatMetadataLabel(key),
+          value: rendered,
+          priority: priorityIndex >= 0 ? priorityIndex : REQUIRED_METADATA_KEYS.length,
+        };
+      })
+      .sort((a, b) => {
+        if (a.priority !== b.priority) {
+          return a.priority - b.priority;
+        }
+        return a.label.localeCompare(b.label);
+      });
   }, [job]);
 
   const noteStats = useMemo(() => {
@@ -492,6 +624,13 @@ export default function App() {
     return job.steps.every((step) => step.status === "completed" || step.status === "partial");
   }, [job]);
 
+  const orderedSteps = useMemo(() => {
+    if (!job) return [] as { step: JobStep; displayOrder: number }[];
+    return job.steps
+      .map((step, index) => ({ step, displayOrder: resolveStepOrder(step.order, index) }))
+      .sort((a, b) => a.displayOrder - b.displayOrder);
+  }, [job]);
+
   const progressPercent = useMemo(() => {
     if (!job) return 0;
     if (!job.progress.total_steps && job.status === "completed") {
@@ -506,14 +645,19 @@ export default function App() {
     );
   }, [job]);
 
+  const isFinalizing = useMemo(() => {
+    if (!job) return false;
+    return job.status === "running" && allStepsCompleted && !job.final_report;
+  }, [job, allStepsCompleted]);
+
   const adjustedProgressPercent = useMemo(() => {
     if (!job) return 0;
     if (job.status === "completed") return 100;
-    if (job.status === "running" && allStepsCompleted && !job.final_report) {
+    if (isFinalizing) {
       return Math.min(progressPercent, 95);
     }
     return progressPercent;
-  }, [job, allStepsCompleted, progressPercent]);
+  }, [job, isFinalizing, progressPercent]);
 
   const jobPhase = useMemo(() => {
     if (!job) return "";
@@ -523,23 +667,79 @@ export default function App() {
     if (job.status === "error") {
       return "Job encountered an error";
     }
+    if (job.status === "clarification_required") {
+      return "Awaiting clarification responses";
+    }
     if (!job.steps.length) {
       return "Planning steps…";
     }
-    const activeStep = job.steps.find((step) => !["completed", "partial"].includes(step.status));
+    const activeStep = orderedSteps.find((entry) => {
+      return !["completed", "partial"].includes(entry.step.status);
+    });
     if (activeStep) {
-      return `Running step ${activeStep.order ?? ""}`;
+      const originalIndex = job.steps.findIndex((step) => step.id === activeStep.step.id);
+      const order = resolveStepOrder(
+        activeStep.step.order,
+        originalIndex >= 0 ? originalIndex : 0,
+      );
+      return `Running step ${order}`;
     }
-    if (allStepsCompleted && !job.final_report) {
-      return "Synthesizing final report…";
+    if (isFinalizing) {
+      return "Finalizing report (critic & artifacts)…";
     }
     return "";
-  }, [job, allStepsCompleted]);
+  }, [job, orderedSteps, isFinalizing]);
 
-  const canSubmitNewJob = !job || isTerminal(job.status) || job.status === "paused";
+  const metadataSignature = useMemo(() => JSON.stringify(job?.metadata ?? {}), [job?.metadata, job?.job_id]);
+  const promptSignature = useMemo(
+    () => JSON.stringify(job?.clarification_prompts ?? []),
+    [job?.clarification_prompts, job?.job_id],
+  );
+
+  useEffect(() => {
+    if (!job) {
+      setClarificationDraft({});
+      setClarificationError(null);
+      return;
+    }
+    if (!job.clarification_prompts?.length) {
+      setClarificationDraft({});
+      if (job.status !== "clarification_required") {
+        setClarificationError(null);
+      }
+      return;
+    }
+    setClarificationDraft((prev) => {
+      const next: Record<string, string> = {};
+      job.clarification_prompts?.forEach((prompt) => {
+        const metadataValue = job.metadata?.[prompt.key];
+        if (typeof metadataValue === "string") {
+          next[prompt.key] = metadataValue;
+          return;
+        }
+        if (Array.isArray(metadataValue)) {
+          next[prompt.key] = metadataValue.map((value) => String(value)).join(", ");
+          return;
+        }
+        if (metadataValue !== undefined && metadataValue !== null) {
+          next[prompt.key] = String(metadataValue);
+          return;
+        }
+        next[prompt.key] = prev[prompt.key] ?? "";
+      });
+      return next;
+    });
+    setClarificationError(null);
+  }, [job, metadataSignature, promptSignature]);
+
+  const requiresClarification = job?.status === "clarification_required";
+  const outstandingPrompts = job?.clarification_prompts ?? [];
+
+  const canSubmitNewJob =
+    !job || isTerminal(job.status) || job.status === "paused" || job.status === "clarification_required";
   const canPause = job ? job.status === "running" || job.status === "queued" : false;
   const canStart = job?.status === "paused";
-  const canCancel = job ? ["running", "queued", "paused"].includes(job.status) : false;
+  const canCancel = job ? ["running", "queued", "paused", "clarification_required"].includes(job.status) : false;
   const canDelete = job ? job.status !== "running" : false;
 
   return (
@@ -746,19 +946,73 @@ export default function App() {
                     {actionInFlight === "delete" ? "Deleting…" : "Delete"}
                   </button>
                 ) : null}
-              </div>
-              {jobActionError ? <p className="error-text job-action-error">{jobActionError}</p> : null}
-              {job.error ? <p className="error-text">Job error: {job.error}</p> : null}
             </div>
-            <div className="card">
-              <h3>Step Timeline</h3>
-              {job.steps.length ? (
-                <ul className="steps-list">
-                  {job.steps.map((step, index) => (
+            {jobActionError ? <p className="error-text job-action-error">{jobActionError}</p> : null}
+            {job.error ? <p className="error-text">Job error: {job.error}</p> : null}
+          </div>
+          {requiresClarification || metadataEntries.length ? (
+            <div className="card clarification-panel">
+              {requiresClarification && outstandingPrompts.length ? (
+                <>
+                  <h3>Clarifications Needed</h3>
+                  <p className="secondary-text">
+                    Provide the missing metadata so the orchestrator can plan the research. Jobs remain
+                    paused until every field below is answered.
+                  </p>
+                  <div className="clarification-fields">
+                    {outstandingPrompts.map((prompt) => (
+                      <div className="clarification-field" key={prompt.key}>
+                        <label htmlFor={`clarify-${prompt.key}`}>{formatMetadataLabel(prompt.key)}</label>
+                        <p className="secondary-text">{prompt.prompt}</p>
+                        <textarea
+                          id={`clarify-${prompt.key}`}
+                          rows={3}
+                          value={clarificationDraft[prompt.key] ?? ""}
+                          onChange={(event) =>
+                            handleClarificationInputChange(prompt.key, event.target.value)
+                          }
+                          disabled={clarificationSubmitting}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {clarificationError ? <p className="error-text">{clarificationError}</p> : null}
+                  <div className="form-actions">
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={handleClarificationSubmit}
+                      disabled={clarificationSubmitting}
+                    >
+                      {clarificationSubmitting ? "Submitting…" : "Submit Clarifications"}
+                    </button>
+                  </div>
+                </>
+              ) : null}
+              {metadataEntries.length ? (
+                <>
+                  <h3>Research Metadata</h3>
+                  <div className="metadata-grid metadata-details">
+                    {metadataEntries.map((entry) => (
+                      <div className="metadata-item" key={entry.key}>
+                        <span>{entry.label}</span>
+                        <strong>{entry.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="card">
+            <h3>Step Timeline</h3>
+            {orderedSteps.length ? (
+              <ul className="steps-list">
+                {orderedSteps.map(({ step, displayOrder }) => (
                     <li key={step.id}>
                       <div className="step-row">
                         <strong>
-                          Step {step.order ?? index + 1}: {step.title}
+                          Step {displayOrder}: {step.title}
                         </strong>
                         <span className={`status-pill status-${step.status}`}>
                           {step.status}
@@ -769,11 +1023,26 @@ export default function App() {
                       ) : null}
                     </li>
                   ))}
+                  {isFinalizing ? (
+                    <li key="finalizing">
+                      <div className="step-row">
+                        <strong>Final synthesis & artifact build</strong>
+                        <span className="status-pill status-running">running</span>
+                      </div>
+                      <p className="secondary-text">
+                        Critic evaluation, citation stitching, and pandoc exports in progress…
+                      </p>
+                    </li>
+                  ) : null}
                 </ul>
               ) : (
-                <p className="secondary-text">Planner has not published steps yet.</p>
+                <p className="secondary-text">
+                  {requiresClarification
+                    ? "Planner will publish steps once clarifications are submitted."
+                    : "Planner has not published steps yet."}
+                </p>
               )}
-            </div>
+          </div>
             <div className="card">
               <h3>Report Preview</h3>
               {job.final_report ? (

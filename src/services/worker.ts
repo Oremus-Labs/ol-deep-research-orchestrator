@@ -80,9 +80,9 @@ interface SectionSpec {
 }
 
 class JobControlError extends Error {
-  readonly status: "paused" | "cancelled";
+  readonly status: "paused" | "cancelled" | "clarification_required";
 
-  constructor(status: "paused" | "cancelled") {
+  constructor(status: "paused" | "cancelled" | "clarification_required") {
     super(`Job ${status}`);
     this.status = status;
     this.name = "JobControlError";
@@ -203,7 +203,8 @@ export class Worker {
       const notes = await listNotes(job.id);
       const sources = await listSourcesByJob(job.id);
       const citationLedger = await listCitationLedger(job.id);
-      const finalReport = appendReferencesToReport(baseReport, citationLedger);
+      const reportWithLinks = linkifyCitations(baseReport, citationLedger);
+      const finalReport = appendReferencesToReport(reportWithLinks, citationLedger);
       await touchJobHeartbeat(job.id);
       if (critic) {
         await this.recordCriticFeedback(job, critic);
@@ -858,6 +859,9 @@ export class Worker {
     if (snapshot.status === "cancelled") {
       throw new JobControlError("cancelled");
     }
+    if (snapshot.status === "clarification_required") {
+      throw new JobControlError("clarification_required");
+    }
   }
 }
 
@@ -880,4 +884,18 @@ function appendReferencesToReport(report: string, ledger: CitationLedgerRecord[]
     .join("\n");
   const separator = report.trim().endsWith("\n") ? "" : "\n";
   return `${report.trim()}${separator}\n\n## References\n${lines}`;
+}
+
+function linkifyCitations(report: string, ledger: CitationLedgerRecord[]) {
+  if (!ledger.length) {
+    return report;
+  }
+  const validNumbers = new Set(ledger.map((entry) => entry.citation_number));
+  return report.replace(/\[(\d+)\](?!\()/g, (match, group) => {
+    const num = Number(group);
+    if (!validNumbers.has(num)) {
+      return match;
+    }
+    return `[${num}](#ref-${num})`;
+  });
 }

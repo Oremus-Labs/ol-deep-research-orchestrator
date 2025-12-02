@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import { Readable } from "node:stream";
 import Fastify, { FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import sensible from "fastify-sensible";
@@ -98,10 +99,23 @@ async function start() {
     return proxyRequest(target, "POST", undefined, reply);
   });
 
+  app.post("/ui-api/research/:id/clarify", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const target = `${apiBase}/research/${id}/clarify`;
+    const payload = JSON.stringify(request.body ?? {});
+    return proxyRequest(target, "POST", payload, reply);
+  });
+
   app.delete("/ui-api/research/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const target = `${apiBase}/research/${id}`;
     return proxyRequest(target, "DELETE", undefined, reply);
+  });
+
+  app.get("/ui-api/research/:id/report/:format", async (request, reply) => {
+    const { id, format } = request.params as { id: string; format: string };
+    const target = `${apiBase}/research/${id}/report/${format}`;
+    return proxyStreamRequest(target, reply);
   });
 
   app.listen({ port, host }, (err, address) => {
@@ -148,6 +162,27 @@ async function proxyRequest(
     }
   }
   return text;
+}
+
+async function proxyStreamRequest(url: string, reply: FastifyReply) {
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "x-api-key": apiKey,
+    },
+  });
+  reply.code(response.status);
+  for (const [key, value] of response.headers.entries()) {
+    if (hopByHopHeaders.has(key.toLowerCase())) {
+      continue;
+    }
+    reply.header(key, value);
+  }
+  if (!response.body) {
+    return reply.send(null);
+  }
+  const nodeStream = Readable.fromWeb(response.body as unknown as ReadableStream);
+  return reply.send(nodeStream);
 }
 
 start().catch((error) => {

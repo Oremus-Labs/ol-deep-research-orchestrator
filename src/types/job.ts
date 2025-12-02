@@ -4,7 +4,8 @@ export type JobStatus =
   | "completed"
   | "error"
   | "cancelled"
-  | "paused";
+  | "paused"
+  | "clarification_required";
 
 export interface ResearchJob {
   id: string;

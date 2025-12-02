@@ -4,7 +4,8 @@ export type JobStatus =
   | "completed"
   | "error"
   | "cancelled"
-  | "paused";
+  | "paused"
+  | "clarification_required";
 
 export interface JobStep {
   id: string;
@@ -12,6 +13,11 @@ export interface JobStep {
   status: JobStatus | "pending" | "partial";
   order: number;
   tool_hint?: string | null;
+}
+
+export interface ClarificationPrompt {
+  key: string;
+  prompt: string;
 }
 
 export interface JobNote {
@@ -37,6 +43,8 @@ export interface JobResponse {
   updated_at?: string;
   final_report?: string | null;
   assets?: JobAssets | null;
+  metadata?: Record<string, unknown> | null;
+  clarification_prompts?: ClarificationPrompt[];
   steps: JobStep[];
   progress: {
     total_steps: number;
