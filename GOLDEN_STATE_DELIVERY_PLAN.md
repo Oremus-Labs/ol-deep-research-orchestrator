@@ -365,6 +365,26 @@ For each phase, append an entry in this format:
   - Image versions on both deployments confirmed with `kubectl -n deep-research get deploy deep-research-{orchestrator,ui} -o jsonpath='{.spec.template.spec.containers[0].image}'` → `gs-phase1b`.
 - Outstanding follow-ups: none
 
+### Phase 2 – Multi-Phase Orchestrator & Planner Iterations ✅
+- Code commits:
+  - ol-deep-research-orchestrator: 27ae31a
+  - ol-kubernetes-cluster: 49fa3ac
+  - ol-n8n: N/A
+- Docker image: ghcr.io/oremus-labs/ol-deep-research-orchestrator:gs-phase2
+- Helm/AppSet updates: workloads.yaml imageTag=gs-phase2 for orchestrator + UI (see `rg gs-phase2 clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`).
+- kubectl apply output: `applicationset.argoproj.io/oremus-labs-workloads configured` via `kubectl apply -f clusters/oremus-labs/mgmt/root/appsets/workloads.yaml`.
+- Argo sync commands:
+  - `kubectl -n argocd exec argo-cd-argocd-server-69f45c784-xkw9w -- argocd --core app sync workloads-deep-research-orchestrator`
+  - `kubectl -n argocd exec argo-cd-argocd-server-69f45c784-xkw9w -- argocd --core app sync workloads-deep-research-ui`
+- Validation:
+  - Migrated Postgres in-cluster via `kubectl -n deep-research exec deep-research-postgres-0 -- psql -U olfa -d deep_research -c "ALTER TABLE research_steps ADD COLUMN IF NOT EXISTS theme TEXT;"` and the matching `iteration` column, then recorded `INSERT INTO schema_migrations ... ('005_step_metadata')` so the auto-runner stays in sync. Local migrations run during `npm run build` exercised the new SQL.
+  - API test job: `curl -s -X POST https://deep-research-ui.oremuslabs.app/ui-api/research -d '{"question":"What are the regulatory, performance, cost, and integration considerations for deploying AI document processing in EU banks?","options":{"depth":"deep"}}'` → job `9bee66b0-de3f-4960-9b35-8b6928cd614d`.
+  - Submitted clarifications with `curl -s -X POST .../clarify -d '{"responses":{...}}'` and watched progress through completion.
+  - Confirmed themed steps + iteration fields exist via `kubectl -n deep-research exec deep-research-postgres-0 -- psql -U olfa -d deep_research -c "select step_order,title,theme,iteration,status from research_steps where job_id='9bee66b0-de3f-4960-9b35-8b6928cd614d' order by step_order;"` (shows overview/regulation/performance/cost/integration/risk rows with iteration 0).
+  - API payload `GET /ui-api/research/9bee66b0-...` now returns the same theme + iteration metadata, proving the UI can display the new structure.
+  - Image versions verified with `kubectl -n deep-research get deploy deep-research-{orchestrator,ui} -o jsonpath='{.spec.template.spec.containers[0].image}'` → both `gs-phase2`.
+- Outstanding follow-ups: monitor recovery behavior when initial steps end `partial` (currently counted as “complete” for coverage since `partial` is treated as terminal status). If we want forced follow-ups for partial steps, adjust `isStepComplete` before the QA/coverage upgrades in Phase 4.
+
 Always include the exact commands run (or reference to saved logs/screenshots) so future readers can reproduce the verification.
 
 ---
