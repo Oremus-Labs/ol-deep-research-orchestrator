@@ -10,16 +10,17 @@ COPY migrations ./migrations
 COPY ui ./ui
 RUN npm run build
 
-FROM node:20-slim
+FROM pandoc/latex:3.1.13-ubuntu
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pandoc texlive-xetex texlive-fonts-recommended texlive-plain-generic ca-certificates unzip wget \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
     && rm -rf /var/lib/apt/lists/*
-RUN wget -qO /tmp/lmodern.zip https://mirrors.ctan.org/fonts/lm.zip \
-    && unzip -q /tmp/lmodern.zip -d /tmp/lmodern \
-    && mkdir -p /usr/share/texlive/texmf-dist/tex/latex \
-    && cp -r /tmp/lmodern/lm/tex/latex/lm /usr/share/texlive/texmf-dist/tex/latex/ \
-    && mktexlsr \
-    && rm -rf /tmp/lmodern /tmp/lmodern.zip
+
+RUN mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" >/etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs unzip wget texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/package*.json ./
