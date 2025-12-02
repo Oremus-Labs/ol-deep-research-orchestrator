@@ -11,4 +11,5 @@ export const prompts = {
   summarizer: loadPrompt("summarizer"),
   critic: loadPrompt("critic"),
   synthesizer: loadPrompt("synthesizer"),
+  clarifier: loadPrompt("clarifier"),
 };

@@ -2,6 +2,7 @@ import { PoolClient, QueryResult } from "pg";
 import { pool } from "../db";
 import {
   CitationLedgerRecord,
+  ClarificationPromptRecord,
   JobStatus,
   ResearchJob,
   ResearchStep,
@@ -17,12 +18,13 @@ interface EnqueueInput {
   maxSteps?: number;
   maxDurationSeconds?: number;
   status?: JobStatus;
+  clarificationPrompts?: ClarificationPromptRecord[];
 }
 
 export async function enqueueJob(input: EnqueueInput): Promise<ResearchJob> {
   const result = await pool.query<ResearchJob>(
-    `INSERT INTO research_jobs (question, options, metadata, status, depth, max_steps, max_duration_seconds)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO research_jobs (question, options, metadata, status, depth, max_steps, max_duration_seconds, clarification_prompts)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
     [
       input.question,
@@ -32,6 +34,7 @@ export async function enqueueJob(input: EnqueueInput): Promise<ResearchJob> {
       input.depth ?? null,
       input.maxSteps ?? null,
       input.maxDurationSeconds ?? null,
+      JSON.stringify(input.clarificationPrompts ?? []),
     ],
   );
   return result.rows[0];
@@ -104,6 +107,23 @@ export async function updateJobStatus(
   await pool.query(sql, values);
 }
 
+export async function updateJobClarifications(params: {
+  jobId: string;
+  metadata: Record<string, unknown>;
+  prompts: ClarificationPromptRecord[];
+  status: JobStatus;
+}) {
+  await pool.query(
+    `UPDATE research_jobs
+        SET metadata = $2,
+            clarification_prompts = $3,
+            status = $4,
+            updated_at = now()
+      WHERE id = $1`,
+    [params.jobId, params.metadata, JSON.stringify(params.prompts ?? []), params.status],
+  );
+}
+
 export async function deleteJob(jobId: string) {
   await pool.query("DELETE FROM research_jobs WHERE id = $1", [jobId]);
 }
@@ -171,17 +191,19 @@ export async function attachSource(
     title?: string;
     snippet?: string;
     raw_storage_url?: string;
+    metadata?: Record<string, unknown>;
   },
 ) {
   await pool.query(
-    `INSERT INTO sources (note_id, url, title, snippet, raw_storage_url)
-     VALUES ($1, $2, $3, $4, $5)`,
+    `INSERT INTO sources (note_id, url, title, snippet, raw_storage_url, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
     [
       noteId,
       source.url ?? null,
       source.title ?? null,
       source.snippet ?? null,
       source.raw_storage_url ?? null,
+      source.metadata ?? null,
     ],
   );
 }

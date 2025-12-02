@@ -7,6 +7,12 @@ export type JobStatus =
   | "paused"
   | "clarification_required";
 
+export interface ClarificationPromptRecord {
+  key: string;
+  prompt: string;
+  required?: boolean;
+}
+
 export interface ResearchJob {
   id: string;
   question: string;
@@ -15,6 +21,7 @@ export interface ResearchJob {
   status: JobStatus;
   final_report: string | null;
   report_assets?: ReportAssets | null;
+  clarification_prompts?: ClarificationPromptRecord[] | null;
   created_at: string;
   updated_at: string;
   depth?: string | null;
@@ -58,6 +65,7 @@ export interface SourceRecord {
   title?: string | null;
   snippet?: string | null;
   raw_storage_url?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface ReportAssets {

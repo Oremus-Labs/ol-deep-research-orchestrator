@@ -17,12 +17,15 @@ import {
   updateJobStatus,
 } from "./repositories/jobRepository";
 import { Worker } from "./services/worker";
-import { JobStatus } from "./types/job";
+import { ClarificationPromptRecord, JobStatus } from "./types/job";
 import { metricsRegistry } from "./metrics";
 import { extractKeyFromUrl, getObjectStream } from "./services/minioClient";
 import { ReportAssets } from "./types/job";
-
-type ClarificationPrompt = { key: string; prompt: string };
+import {
+  filterOutstandingPrompts,
+  generateClarificationPrompts,
+} from "./services/clarificationPlanner";
+import { updateJobClarifications } from "./repositories/jobRepository";
 
 const metadataSchema = z
   .object({
@@ -36,51 +39,6 @@ const metadataSchema = z
     quality_constraints: z.string().optional(),
   })
   .passthrough();
-
-const REQUIRED_METADATA_FIELDS: ClarificationPrompt[] = [
-  {
-    key: "time_horizon",
-    prompt: "What time horizon should this research focus on (e.g., current state, 12-18 months, 3-5 year outlook)?",
-  },
-  {
-    key: "region_focus",
-    prompt: "Which geographic regions or regulatory domains are in scope (e.g., US, EU/GDPR, APAC)?",
-  },
-  {
-    key: "data_modalities",
-    prompt: "List the data modalities that must be analyzed (blogs, PDFs, scraped HTML, structured CSV/JSON, etc.).",
-  },
-  {
-    key: "integration_targets",
-    prompt: "Which enterprise systems must consume this report (knowledge graph, SharePoint, MDM, ticketing, etc.)?",
-  },
-  {
-    key: "quality_constraints",
-    prompt: "Specify any tone, compliance, or quality constraints (red lines, citation expectations, reviewer needs).",
-  },
-];
-
-function hasMetadataValue(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return false;
-  }
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  if (Array.isArray(value)) {
-    return value.some((entry) => hasMetadataValue(entry));
-  }
-  if (typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>).length > 0;
-  }
-  return true;
-}
-
-function collectClarificationPrompts(metadata?: Record<string, unknown> | null): ClarificationPrompt[] {
-  const bag = metadata ?? {};
-  return REQUIRED_METADATA_FIELDS.filter((field) => !hasMetadataValue(bag[field.key]))
-    .map((field) => ({ key: field.key, prompt: field.prompt }));
-}
 
 const worker = new Worker();
 const createSchema = z.object({
@@ -317,7 +275,8 @@ async function createJobFromPayload(
       }
     }
   }
-  const outstandingPrompts = collectClarificationPrompts(metadata);
+  const clarifierPrompts = await generateClarificationPrompts(body.question, metadata);
+  const outstandingPrompts = filterOutstandingPrompts(clarifierPrompts, metadata);
   const initialStatus: JobStatus = outstandingPrompts.length ? "clarification_required" : "queued";
   return enqueueJob({
     question: body.question,
@@ -327,6 +286,7 @@ async function createJobFromPayload(
     maxSteps: body.options?.max_steps ?? config.worker.maxSteps,
     maxDurationSeconds: body.options?.max_duration_seconds ?? config.worker.maxJobSeconds,
     status: initialStatus,
+    clarificationPrompts: outstandingPrompts,
   });
 }
 
@@ -338,7 +298,10 @@ async function buildJobResponse(app: FastifyInstance, jobId: string) {
   const steps = await listSteps(job.id);
   const notes = await listNotes(job.id);
   const completed = steps.filter((step) => step.status === "completed").length;
-  const clarificationPrompts = collectClarificationPrompts(job.metadata ?? {});
+  const outstandingPrompts = filterOutstandingPrompts(
+    (job.clarification_prompts as ClarificationPromptRecord[] | undefined) ?? [],
+    job.metadata ?? {},
+  );
   return {
     job_id: job.id,
     status: job.status,
@@ -348,7 +311,7 @@ async function buildJobResponse(app: FastifyInstance, jobId: string) {
     final_report: job.final_report,
     assets: job.report_assets ?? null,
     metadata: job.metadata ?? {},
-    clarification_prompts: clarificationPrompts,
+    clarification_prompts: outstandingPrompts,
     steps: steps.map((step) => ({
       id: step.id,
       title: step.title,
@@ -382,11 +345,14 @@ async function submitClarification(
     throw app.httpErrors.badRequest("Job does not require clarification");
   }
   const mergedMetadata = { ...(job.metadata ?? {}), ...responses };
-  const remaining = collectClarificationPrompts(mergedMetadata);
+  const regeneratedPrompts = await generateClarificationPrompts(job.question, mergedMetadata);
+  const remaining = filterOutstandingPrompts(regeneratedPrompts, mergedMetadata);
   const nextStatus: JobStatus = remaining.length ? "clarification_required" : "queued";
-  await updateJobStatus(job.id, nextStatus, {
+  await updateJobClarifications({
+    jobId: job.id,
     metadata: mergedMetadata,
-    error: null,
+    prompts: remaining,
+    status: nextStatus,
   });
   return buildJobResponse(app, job.id);
 }
